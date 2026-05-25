@@ -2534,8 +2534,11 @@ function OutfitModal({ onClose, onDone }: { onClose: () => void; onDone: (until:
 
   const overlay: CSSProperties = {
     position:'fixed',inset:0,zIndex:300,background:'rgba(5,5,16,0.97)',
-    display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',
-    fontFamily:'monospace',color:'#e8e8f0',padding:'20px 16px',overflowY:'auto',
+    display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'flex-start',
+    height:'100vh',maxHeight:'100dvh',minHeight:'100svh',
+    fontFamily:'monospace',color:'#e8e8f0',
+    padding:'calc(20px + env(safe-area-inset-top, 0px)) 16px calc(32px + env(safe-area-inset-bottom, 0px))',
+    overflowX:'hidden',overflowY:'auto',overscrollBehaviorY:'contain',touchAction:'pan-y',
   }
   const btnStyle: CSSProperties = {marginTop:16,padding:'13px 28px',minHeight:44,background:'#e040fb',color:'#0d0d1a',border:'none',borderRadius:4,fontSize:13,fontFamily:'monospace',fontWeight:700,cursor:'pointer',letterSpacing:1.4}
   const ghostStyle: CSSProperties = {marginTop:8,padding:'10px 22px',minHeight:40,background:'transparent',color:'#888',border:'1px solid #333',borderRadius:4,fontSize:12,fontFamily:'monospace',cursor:'pointer'}
