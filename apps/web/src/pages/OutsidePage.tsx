@@ -2204,6 +2204,7 @@ const outsideHintOkStyle: CSSProperties = {
 
 // ── Outfit Camera Modal ───────────────────────────────────────────────────────
 type ModalStep = 'intro' | 'fullbody' | 'review' | 'generating' | 'preview' | 'saving'
+type OutfitCameraFacing = 'user' | 'environment'
 type OutfitNotice = {
   tone: 'pending' | 'success' | 'warning'
   message: string
@@ -2300,6 +2301,7 @@ function OutfitModal({ onClose, onDone }: { onClose: () => void; onDone: (until:
   const [notice, setNotice] = useState<OutfitNotice>(null)
   const [generationProcess, setGenerationProcess] = useState<OutfitGenerationProcess>(createInitialOutfitGenerationProcess)
   const [cameraMode, setCameraMode] = useState<'live'|'file'>('live')
+  const [cameraFacing, setCameraFacing] = useState<OutfitCameraFacing>('environment')
   const [isDetecting, setIsDetecting] = useState(false)
   const [isCameraReady, setIsCameraReady] = useState(false)
   const [stream, setStream] = useState<MediaStream|null>(null)
@@ -2319,8 +2321,9 @@ function OutfitModal({ onClose, onDone }: { onClose: () => void; onDone: (until:
   }, [stream])
   useEffect(() => () => { stream?.getTracks().forEach(t=>t.stop()) }, [stream])
 
-  const startCamera = useCallback(async (facing: 'user'|'environment') => {
+  const startCamera = useCallback(async (facing: OutfitCameraFacing) => {
     stopStream(); setError(null)
+    setCameraFacing(facing)
     setIsCameraReady(false)
     if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
       setCameraMode('file')
@@ -2340,6 +2343,11 @@ function OutfitModal({ onClose, onDone }: { onClose: () => void; onDone: (until:
       setError('Камера недоступна. Разреши доступ в Safari или сделай фото через системную камеру ниже.')
     }
   }, [stopStream])
+
+  const handleSwitchCamera = useCallback(() => {
+    const nextFacing: OutfitCameraFacing = cameraFacing === 'environment' ? 'user' : 'environment'
+    void startCamera(nextFacing)
+  }, [cameraFacing, startCamera])
 
   useEffect(() => {
     if (step !== 'fullbody' || cameraMode !== 'live' || !stream || !videoRef.current) return
@@ -2524,6 +2532,7 @@ function OutfitModal({ onClose, onDone }: { onClose: () => void; onDone: (until:
     setError(null)
     setNotice(null)
     setGenerationProcess(createInitialOutfitGenerationProcess())
+    setCameraFacing('environment')
     setStep('intro')
   }, [stopStream])
 
@@ -2589,12 +2598,15 @@ function OutfitModal({ onClose, onDone }: { onClose: () => void; onDone: (until:
         {cameraMode==='live' ? (
           <>
             <button style={btnStyle} onClick={handleCapture} disabled={isDetecting}>{isDetecting ? 'ОБРАБОТКА' : 'СНЯТЬ'}</button>
-            <input ref={cameraInputRef} type="file" accept="image/*" capture="environment" style={{display:'none'}} onChange={handleFileInput}/>
+            <button style={ghostStyle} onClick={handleSwitchCamera} disabled={isDetecting}>
+              {cameraFacing === 'environment' ? 'ФРОНТАЛЬНАЯ КАМЕРА' : 'ЗАДНЯЯ КАМЕРА'}
+            </button>
+            <input ref={cameraInputRef} type="file" accept="image/*" capture={cameraFacing} style={{display:'none'}} onChange={handleFileInput}/>
           </>
         ) : (
           <label style={{...btnStyle,...pickerLabelStyle}}>
             <span>СНЯТЬ</span>
-            <input type="file" accept="image/*" capture="environment" style={pickerInputStyle} onChange={handleFileInput}/>
+            <input type="file" accept="image/*" capture={cameraFacing} style={pickerInputStyle} onChange={handleFileInput}/>
           </label>
         )}
         <input ref={fileInputRef} type="file" accept="image/*" style={{display:'none'}} onChange={handleFileInput}/>

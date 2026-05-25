@@ -18,6 +18,7 @@ import { usePlayerStore } from '@/store/playerStore'
 import { supabase } from '@/utils/supabase'
 
 type Step = 'intro' | 'fullbody' | 'review' | 'generating' | 'preview' | 'saving'
+type CameraFacing = 'user' | 'environment'
 type TrellisNotice = {
   tone: 'pending' | 'success' | 'warning'
   message: string
@@ -113,6 +114,7 @@ export default function CameraPage() {
   })
   const [isDetecting, setIsDetecting] = useState(false)
   const [isCameraReady, setIsCameraReady] = useState(false)
+  const [cameraFacing, setCameraFacing] = useState<CameraFacing>('environment')
   const [stream, setStream] = useState<MediaStream | null>(null)
 
   const videoRef = useRef<HTMLVideoElement>(null)
@@ -134,8 +136,9 @@ export default function CameraPage() {
     return () => stream?.getTracks().forEach((track) => track.stop())
   }, [stream])
 
-  const startCamera = useCallback(async (facing: 'user' | 'environment') => {
+  const startCamera = useCallback(async (facing: CameraFacing) => {
     stopStream()
+    setCameraFacing(facing)
     setError(null)
     setIsCameraReady(false)
     if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
@@ -161,6 +164,11 @@ export default function CameraPage() {
       setError('Камера недоступна — загрузи фото из галереи')
     }
   }, [stopStream])
+
+  const handleSwitchCamera = useCallback(() => {
+    const nextFacing: CameraFacing = cameraFacing === 'environment' ? 'user' : 'environment'
+    void startCamera(nextFacing)
+  }, [cameraFacing, startCamera])
 
   useEffect(() => {
     if (step !== 'fullbody' || !stream || !videoRef.current) return
@@ -352,6 +360,7 @@ export default function CameraPage() {
     setError(null)
     setTrellisNotice(null)
     setGenerationProcess({ stage: 'source', sourceImage: null, kieImage: null, progress: 0, message: 'Готовим фото' })
+    setCameraFacing('environment')
     setStep('intro')
   }, [stopStream])
 
@@ -406,11 +415,14 @@ export default function CameraPage() {
         <button style={styles.primaryButton} onClick={handleCapture} disabled={isDetecting}>
           {isDetecting ? 'ОБРАБОТКА' : 'СНЯТЬ'}
         </button>
+        <button style={styles.ghostButton} onClick={handleSwitchCamera} disabled={isDetecting}>
+          {cameraFacing === 'environment' ? 'ФРОНТАЛЬНАЯ КАМЕРА' : 'ЗАДНЯЯ КАМЕРА'}
+        </button>
         <input
           ref={cameraInputRef}
           type="file"
           accept="image/*"
-          capture="environment"
+          capture={cameraFacing}
           style={{ display: 'none' }}
           onChange={handleFileUpload}
         />
