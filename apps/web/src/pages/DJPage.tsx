@@ -21,6 +21,28 @@ const DJ_AUDIO_PRESET_320 = {
   ...AudioPresets.musicHighQualityStereo,
   maxBitrate: 320_000,
 }
+const DJ_USER_AGENT = typeof navigator === 'undefined' ? '' : navigator.userAgent
+const DJ_IS_IOS = /iPad|iPhone|iPod/i.test(DJ_USER_AGENT) ||
+  (typeof navigator !== 'undefined' && navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
+const DJ_IS_MOBILE = DJ_IS_IOS || /Android|Mobile/i.test(DJ_USER_AGENT)
+const DJ_AUDIO_PRESET = DJ_IS_MOBILE
+  ? { ...AudioPresets.musicHighQuality, maxBitrate: DJ_IS_IOS ? 96_000 : 160_000 }
+  : DJ_AUDIO_PRESET_320
+const DJ_CAPTURE_CONSTRAINTS: MediaTrackConstraints = DJ_IS_MOBILE
+  ? {
+      echoCancellation: false,
+      noiseSuppression: false,
+      autoGainControl: false,
+      channelCount: 1,
+    }
+  : {
+      echoCancellation: false,
+      noiseSuppression: false,
+      autoGainControl: false,
+      channelCount: 2,
+      sampleRate: 48000,
+      sampleSize: 16,
+    }
 
 export function DJBoothPanel({ embedded = false, onMinimize }: DJBoothPanelProps = {}) {
   const roomRef = useRef<Room | null>(null)
@@ -54,8 +76,9 @@ export function DJBoothPanel({ embedded = false, onMinimize }: DJBoothPanelProps
   }
 
   const loadDevices = useCallback(async () => {
+    let permissionStream: MediaStream | null = null
     try {
-      await navigator.mediaDevices.getUserMedia({ audio: true, video: false })
+      permissionStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false })
       const list = await navigator.mediaDevices.enumerateDevices()
       const audioInputs = list.filter((device) => device.kind === 'audioinput')
       setDevices(audioInputs)
@@ -63,6 +86,8 @@ export function DJBoothPanel({ embedded = false, onMinimize }: DJBoothPanelProps
     } catch (e: any) {
       setError(e?.message || 'Не удалось получить доступ к аудиоустройствам')
       setStatus('error')
+    } finally {
+      permissionStream?.getTracks().forEach((track) => track.stop())
     }
   }, [])
 
@@ -161,22 +186,17 @@ export function DJBoothPanel({ embedded = false, onMinimize }: DJBoothPanelProps
 
       const track = await createLocalAudioTrack({
         deviceId: deviceId ? { exact: deviceId } : undefined,
-        echoCancellation: false,
-        noiseSuppression: false,
-        autoGainControl: false,
-        channelCount: 2,
-        sampleRate: 48000,
-        sampleSize: 16,
+        ...DJ_CAPTURE_CONSTRAINTS,
       })
       trackRef.current = track
 
       await room.localParticipant.publishTrack(track, {
         name: 'dj_audio',
         source: Track.Source.Microphone,
-        audioPreset: DJ_AUDIO_PRESET_320,
-        dtx: false,
-        red: true,
-        forceStereo: true,
+        audioPreset: DJ_AUDIO_PRESET,
+        dtx: DJ_IS_IOS,
+        red: !DJ_IS_IOS,
+        forceStereo: !DJ_IS_MOBILE,
         stream: 'dj',
       })
 

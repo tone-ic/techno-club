@@ -477,6 +477,8 @@ export default function VoiceChat({
       }
       const handleDisconnected = () => {
         detachAllRemotes()
+        void releaseLocalVoiceCapture(room)
+        setOutgoingTalking(false)
         roomRef.current = null
         if (mountedRef.current) setStatus('idle')
       }
@@ -569,6 +571,22 @@ export default function VoiceChat({
     return capture.track
   }
 
+  const releaseLocalVoiceCapture = async (room = roomRef.current) => {
+    const track = localTrackRef.current
+    const capture = localCaptureRef.current
+    localTrackRef.current = null
+    localCaptureRef.current = null
+    vadLevelRef.current = 0
+
+    if (track && room) {
+      await room.localParticipant.unpublishTrack(track, true).catch(() => undefined)
+    }
+    track?.stop()
+    capture?.sourceStream.getTracks().forEach((sourceTrack) => sourceTrack.stop())
+    await capture?.audioContext.close().catch(() => undefined)
+    dispatchVoiceLevels(0, false, Array.from(remotesRef.current.values()))
+  }
+
   const prepareMicrophone = async () => {
     if (!myPlayerId) return
 
@@ -577,9 +595,6 @@ export default function VoiceChat({
       const room = await ensureRoom()
       incomingAudioUnlockRequestedRef.current = true
       await startIncomingAudioElements(room)
-      const track = await ensureLocalVoiceTrack(room)
-      await localCaptureRef.current?.audioContext.resume().catch(() => undefined)
-      await track.mute().catch(() => undefined)
       setOutgoingTalking(false)
       if (mountedRef.current) {
         setError('')
@@ -598,12 +613,14 @@ export default function VoiceChat({
     if (!track) {
       setOutgoingTalking(false)
       setStatus((current) => current === 'talking' ? 'ready' : current)
+      if (voiceModeRef.current !== 'auto') await releaseLocalVoiceCapture()
       return
     }
 
     await track.mute().catch(() => undefined)
     setOutgoingTalking(false)
     if (mountedRef.current) setStatus(roomRef.current ? 'ready' : 'idle')
+    if (voiceModeRef.current !== 'auto') await releaseLocalVoiceCapture()
   }
 
   const startTalking = async () => {
@@ -623,6 +640,7 @@ export default function VoiceChat({
         await track.mute().catch(() => undefined)
         setOutgoingTalking(false)
         if (mountedRef.current) setStatus(roomRef.current ? 'ready' : 'idle')
+        if (voiceModeRef.current !== 'auto') await releaseLocalVoiceCapture(room)
         return
       }
 
@@ -637,6 +655,7 @@ export default function VoiceChat({
         setStatus('error')
       }
       setOutgoingTalking(false)
+      if (voiceModeRef.current !== 'auto') await releaseLocalVoiceCapture()
     }
   }
 
@@ -715,6 +734,7 @@ export default function VoiceChat({
       voiceModeRef.current = 'ptt'
       setVoiceMode('ptt')
       setOutgoingTalking(false)
+      await releaseLocalVoiceCapture()
       if (mountedRef.current) {
         setError(voiceErrorMessage(e, 'Не удалось включить авто-микрофон'))
         setStatus('error')
@@ -758,20 +778,10 @@ export default function VoiceChat({
 
   const disconnect = async () => {
     const room = roomRef.current
-    const track = localTrackRef.current
-    const capture = localCaptureRef.current
     roomRef.current = null
-    localTrackRef.current = null
-    localCaptureRef.current = null
     stopVadLoop()
     detachAllRemotes()
-
-    if (track && room) {
-      await room.localParticipant.unpublishTrack(track, true).catch(() => undefined)
-    }
-    track?.stop()
-    capture?.sourceStream.getTracks().forEach((sourceTrack) => sourceTrack.stop())
-    capture?.audioContext.close().catch(() => undefined)
+    await releaseLocalVoiceCapture(room)
     remoteAudioContextRef.current?.close().catch(() => undefined)
     remoteAudioContextRef.current = null
     setOutgoingTalking(false)

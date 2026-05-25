@@ -6,6 +6,7 @@ import { isEmailAuthorizedUser } from '@/utils/emailAuth'
 import { usePlayerStore } from '@/store/playerStore'
 import { lazy, Suspense } from 'react'
 import MusicPlayer from '@/components/MusicPlayer'
+import ScreenWakeLock from '@/components/ScreenWakeLock'
 
 const LoginPage   = lazy(() => import('@/pages/LoginPage'))
 const AgeGatePage = lazy(() => import('@/pages/AgeGatePage'))
@@ -152,6 +153,7 @@ export default function App() {
           <Route path="*"         element={<Navigate to="/" replace />} />
         </Routes>
         <MusicPlayer />
+        <ScreenWakeLock />
       </Suspense>
     </BrowserRouter>
   )

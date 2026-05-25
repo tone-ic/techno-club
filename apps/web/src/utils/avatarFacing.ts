@@ -1,6 +1,6 @@
 import type * as THREE from 'three'
 
-const GENERATED_AVATAR_PARENT_ROTATION_OFFSET = Math.PI
+const GENERATED_AVATAR_PARENT_ROTATION_OFFSET = 0
 
 function generatedVisualOffset(group: THREE.Object3D): number {
   return group.userData.generatedModel ? GENERATED_AVATAR_PARENT_ROTATION_OFFSET : 0

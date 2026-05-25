@@ -274,9 +274,9 @@ export default function CameraPage() {
         sourceImage: fullbodyPhoto,
         kieImage: null,
         progress: 22,
-        message: 'Быстрый аватар готов как fallback',
+        message: 'Быстрый аватар готов',
       })
-      setTrellisNotice({ tone: 'pending', message: 'Отправляем фото в Kie' })
+      setTrellisNotice({ tone: 'pending', message: 'Подготавливаем фото' })
 
       const result = await generateTrellisAvatarStream(
         fullbodyPhoto,
@@ -300,12 +300,12 @@ export default function CameraPage() {
       if (result.trellis.status === 'generated') {
         setTrellisNotice({
           tone: result.autorig?.status === 'failed' ? 'warning' : 'success',
-          message: `Pixal3D модель готова. ${formatAutorigMessage(result.autorig ?? result.avatar.autorig ?? null)}`,
+          message: `3D-модель готова. ${formatAutorigMessage(result.autorig ?? result.avatar.autorig ?? null)}`,
         })
       } else {
         setTrellisNotice({
           tone: 'warning',
-          message: `Pixal3D не вернул 3D-модель, оставили быстрый аватар. ${cleanGenerationDetails(result.trellis.error ?? '')}`.trim(),
+          message: `3D-модель не получилась, оставили быстрый аватар. ${cleanGenerationDetails(result.trellis.error ?? '')}`.trim(),
         })
       }
       setStep('preview')
@@ -470,7 +470,7 @@ export default function CameraPage() {
         <Brand />
         <div style={styles.title}>{step === 'saving' ? 'Сохраняем...' : 'Собираем персонажа...'}</div>
         <div style={{ ...styles.copy, marginTop: 12 }}>
-          {step === 'saving' ? 'Секунду' : trellisNotice?.message ?? 'Генерируем 3D-модель в Pixal3D'}
+          {step === 'saving' ? 'Секунду' : trellisNotice?.message ?? 'Собираем 3D-модель'}
         </div>
         {step === 'generating' && <GenerationProcessView process={generationProcess} />}
       </Screen>
@@ -522,12 +522,14 @@ function isKiePreparationError(message: string): boolean {
 function cleanGenerationDetails(details: string): string {
   return details
     .replace(/<[^>]*>/g, ' ')
-    .replace(/KIE_API_KEYS/g, 'ключи сервиса генерации')
-    .replace(/KIE/gi, 'Kie')
-    .replace(/Hugging Face Pixal3D/gi, 'Pixal3D')
-    .replace(/Hugging Face TRELLIS\.?2?/gi, 'Pixal3D')
-    .replace(/TRELLIS\.?2?/gi, 'Pixal3D')
-    .replace(/GLB/gi, '3D-модель')
+    .replace(/KIE_API_KEYS/g, 'ключи модуля генерации')
+    .replace(/Hugging Face Pixal3D/gi, 'модуль 3D-сборки')
+    .replace(/Hugging Face TRELLIS\.?2?/gi, 'модуль 3D-сборки')
+    .replace(/Pixal3D/gi, 'модуль 3D-сборки')
+    .replace(/TRELLIS\.?2?/gi, 'модуль 3D-сборки')
+    .replace(/\bKIE\b/gi, 'модуль подготовки фото')
+    .replace(/ENOENT: no such file or directory, open '[^']*rigged\.(?:glb|3D-модель)'/gi, 'подготовка движений не создала файл 3D-модели')
+    .replace(/\bGLB\b/gi, '3D-модель')
     .replace(/Blender autorig/gi, 'подготовка движений')
     .replace(/\s+/g, ' ')
     .trim()
@@ -535,7 +537,7 @@ function cleanGenerationDetails(details: string): string {
 
 function formatGenerationError(message: string): string {
   if (isKiePreparationError(message)) {
-    return `Kie не подготовил фото для Pixal3D. ${cleanGenerationDetails(message)}`.trim()
+    return `Не удалось подготовить фото для 3D-модели. ${cleanGenerationDetails(message)}`.trim()
   }
 
   return cleanGenerationDetails(message)
@@ -572,17 +574,17 @@ function processPipelineEvent(
 function GenerationProcessView({ process }: { process: GenerationProcess }) {
   const stages: Array<{ key: PipelineStage; label: string }> = [
     { key: 'source', label: 'Исходное фото' },
-    { key: 'fallback', label: 'Fallback' },
-    { key: 'kie_upload', label: 'Kie upload' },
-    { key: 'kie_create', label: 'Kie task' },
-    { key: 'kie_wait', label: 'Kie generation' },
-    { key: 'kie_download', label: 'Kie download' },
-    { key: 'kie_done', label: 'Kie photo' },
-    { key: 'trellis_connect', label: 'Pixal3D connect' },
-    { key: 'trellis_session', label: 'Pixal3D session' },
-    { key: 'trellis_preprocess', label: 'Pixal3D preprocess' },
-    { key: 'trellis_generate', label: 'Pixal3D GLB' },
-    { key: 'trellis_upload', label: 'GLB save' },
+    { key: 'fallback', label: 'Быстрый аватар' },
+    { key: 'kie_upload', label: 'Загрузка фото' },
+    { key: 'kie_create', label: 'Подготовка' },
+    { key: 'kie_wait', label: 'Обработка фото' },
+    { key: 'kie_download', label: 'Получение фото' },
+    { key: 'kie_done', label: 'Фото готово' },
+    { key: 'trellis_connect', label: '3D подключение' },
+    { key: 'trellis_session', label: 'Очередь сборки' },
+    { key: 'trellis_preprocess', label: 'Нормализация' },
+    { key: 'trellis_generate', label: '3D сборка' },
+    { key: 'trellis_upload', label: 'Сохранение модели' },
     { key: 'autorig', label: 'Движения' },
     { key: 'save', label: 'Сохранение' },
     { key: 'done', label: 'Готово' },
@@ -621,7 +623,7 @@ function GenerationProcessView({ process }: { process: GenerationProcess }) {
           <PipelineImage label="исходное фото" src={process.sourceImage} wide={false} />
         )}
         {process.kieImage && (
-          <PipelineImage label="фото из Kie" src={process.kieImage} wide={false} />
+          <PipelineImage label="подготовленное фото" src={process.kieImage} wide={false} />
         )}
       </div>
 
@@ -646,9 +648,9 @@ function PipelineImage({ label, src, wide }: { label: string; src: string; wide:
 }
 
 function formatTrellisPipelineHint(stage: PipelineStage): string {
-  if (stage === 'fallback') return 'Локальный аватар готов как fallback'
-  if (stage.startsWith('kie_')) return 'Kie готовит фото, которое пойдёт в Pixal3D'
-  if (stage.startsWith('trellis_')) return 'Pixal3D строит 3D-модель по фото из Kie'
+  if (stage === 'fallback') return 'Быстрый аватар готов'
+  if (stage.startsWith('kie_')) return 'Готовим фото для 3D-модели'
+  if (stage.startsWith('trellis_')) return 'Собираем 3D-модель'
   if (stage === 'autorig') return 'Подготавливаем модель для движения'
   if (stage === 'save') return 'Сохраняем аватар'
   if (stage === 'done') return '3D-модель готова для персонажа'

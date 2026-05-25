@@ -5,15 +5,18 @@ import { getLiveKitToken, LIVEKIT_DJ_ROOM } from '@/utils/livekit'
 import type { MusicServerState } from '@/utils/wsClient'
 
 const FALLBACK_TRACKS = [
-  '/music/Ten%20Walls%20-%20Rocky.mp3',
-  '/music/Tensnake%20-%20Desire.mp3',
-  '/music/T%C3%AAte%20de%20la%20Course%20-%20Roses.mp3',
-  '/music/The%20Blessed%20Madonna%20-%20Serotonin%20Moonbeams.mp3',
-  '/music/Tony%20Romera%20-%20Share%20My%20Love.mp3',
-  "/music/Trance%20-%20Karma's%20Remix.mp3",
-  '/music/Traumprinz%20-%20Believe%20(Original%20Mix).mp3',
-  '/music/Travis%20Emmons%20-%20Redbone.mp3',
-  '/music/Treasure%20Series%20-%20A%20Sunday%20Afternoon.mp3',
+  '/music/Deas%20-%20Drifted%20Off.mp3',
+  '/music/Hertz%20-%20Maverick%20(Original%20Mix).mp3',
+  '/music/Kr!Z%20-%20Inferno.mp3',
+  '/music/Maraxe%20-%20Rattle.mp3',
+  '/music/Maraxe%20-%20Serpent.mp3',
+  '/music/Maraxe%2CK.E.N.Y.U.%20-%20Serpent%20-%20K.E.N.Y.U.%20Remix.mp3',
+  '/music/Maraxe%2CWater%20Please%20-%20Serpent%20-%20Water%20Please%20Remix.mp3',
+  '/music/PREMIERE_Deaf_Toucan_-_Almeidas_Loop_Ponky_Remix_ADT004.mp3',
+  '/music/Rattlesnake_-_Rat.mp3',
+  '/music/Sicion%20-%20Dancing%20Shadows.mp3',
+  '/music/Transition%20-%20Friday%20At%20Patterns.mp3',
+  '/music/Uncertain%20-%20Pride.mp3',
 ]
 export const MUSIC_BPM_EVENT = 'music-bpm'
 export const MUSIC_OUTPUT_EVENT = 'music-output'
@@ -709,6 +712,10 @@ function currentServerMusicState() {
   if (Date.now() - _serverMusicStateReceivedAt > SERVER_MUSIC_STATE_STALE_MS) return null
   if (_currentTrackIdx >= 0 && _serverMusicState.trackIdx !== _currentTrackIdx) return null
   return _serverMusicState
+}
+
+function hasReliableServerBpm(state: MusicServerState | null) {
+  return Boolean(state && state.bpmSource === 'audio' && (state.bpmConfidence ?? 1) >= 0.12)
 }
 
 function serverTimestampToPerformanceTime(serverTimestampMs: number) {
@@ -1446,18 +1453,18 @@ function dispatchDjState(active: boolean) {
 }
 
 function currentMusicBpm() {
-  if (!_djActive) {
-    const serverState = currentServerMusicState()
-    if (serverState) {
-      _lastKnownBpm = Math.round(clamp(serverState.bpm, BPM_MIN, BPM_MAX) * 10) / 10
-      return _lastKnownBpm
-    }
-  }
-
   const estimator = _djActive ? _djBpmEstimator : _trackBpmEstimator
   if (estimator?.bpm && estimator.confidence >= LIVE_BPM_MIN_CONFIDENCE) {
     _lastKnownBpm = Math.round(clamp(estimator.reportedBpm ?? estimator.bpm, BPM_MIN, BPM_MAX) * 10) / 10
     return _lastKnownBpm
+  }
+
+  if (!_djActive) {
+    const serverState = currentServerMusicState()
+    if (hasReliableServerBpm(serverState)) {
+      _lastKnownBpm = Math.round(clamp(serverState!.bpm, BPM_MIN, BPM_MAX) * 10) / 10
+      return _lastKnownBpm
+    }
   }
 
   const sourcePlaying = _djActive
@@ -1472,7 +1479,7 @@ function dispatchMusicBpm() {
   const ctx = _ctx
   const bpm = currentMusicBpm()
   const serverState = currentServerMusicState()
-  const useServerBeat = Boolean(serverState && !_djActive)
+  const useServerBeat = hasReliableServerBpm(serverState) && !_djActive
   const liveBeatAtMs = !useServerBeat && estimator?.lastBeatAtSec !== null && estimator?.lastBeatAtSec !== undefined && ctx
     ? performance.now() - Math.max(0, ctx.currentTime - estimator.lastBeatAtSec) * 1000
     : null

@@ -888,13 +888,13 @@ async function generateKieSingleModelPhoto(
   sourceImage: string,
   emit?: AvatarProgressEmit,
 ): Promise<PreparedModelPhoto> {
-  await emitProgress(emit, 'kie_upload', 30, 'Загружаем исходное фото в Kie')
+  await emitProgress(emit, 'kie_upload', 30, 'Загружаем исходное фото')
   const uploaded = await uploadKieInputImageDataUrl(sourceImage)
-  await emitProgress(emit, 'kie_create', 36, 'Запускаем генерацию фото в Kie')
+  await emitProgress(emit, 'kie_create', 36, 'Запускаем подготовку фото')
   const { taskId, apiKey } = await createKieImageTask(uploaded.url, uploaded.apiKey)
-  await emitProgress(emit, 'kie_wait', 44, 'Kie генерирует фото для Pixal3D')
+  await emitProgress(emit, 'kie_wait', 44, 'Готовим фото для 3D-модели')
   const resultUrl = await pollKieImageTask(taskId, apiKey)
-  await emitProgress(emit, 'kie_download', 52, 'Забираем готовое фото из Kie')
+  await emitProgress(emit, 'kie_download', 52, 'Забираем подготовленное фото')
   const image = await downloadKiePng(resultUrl)
   const prepared = {
     source: 'kie',
@@ -905,7 +905,7 @@ async function generateKieSingleModelPhoto(
     type: 'prepared',
     stage: 'kie_done',
     progress: 58,
-    message: 'Фото Kie готово, отправляем его в Pixal3D',
+    message: 'Фото готово, собираем 3D-модель',
     prepared,
   })
   return prepared
@@ -1126,6 +1126,17 @@ async function downloadModelToFile(modelUrl: string, targetPath: string) {
   await writeFile(targetPath, Buffer.from(await response.arrayBuffer()))
 }
 
+function findBlenderAutorigOutputPath(tmpRoot: string, preferredPath: string): string | null {
+  if (existsSync(preferredPath)) return preferredPath
+
+  const candidates = readdirSync(tmpRoot, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith('.glb'))
+    .map((entry) => path.join(tmpRoot, entry.name))
+    .filter((candidate) => candidate !== path.join(tmpRoot, 'input.glb'))
+
+  return candidates[0] ?? null
+}
+
 async function requestBlenderAutorigModel(userId: string, modelUrl: string): Promise<TrellisModelResult | null> {
   if (!blenderAutorigEnabled()) return null
 
@@ -1137,7 +1148,12 @@ async function requestBlenderAutorigModel(userId: string, modelUrl: string): Pro
     await mkdir(tmpRoot, { recursive: true })
     await downloadModelToFile(modelUrl, inputPath)
     await runBlenderAutorig(inputPath, outputPath)
-    const riggedBytes = await readFile(outputPath)
+    const riggedPath = findBlenderAutorigOutputPath(tmpRoot, outputPath)
+    if (!riggedPath) {
+      throw new Error('Подготовка движений не создала файл 3D-модели')
+    }
+
+    const riggedBytes = await readFile(riggedPath)
     const riggedUrl = await uploadModelBytes(userId, riggedBytes.buffer.slice(
       riggedBytes.byteOffset,
       riggedBytes.byteOffset + riggedBytes.byteLength,
@@ -1688,25 +1704,25 @@ async function requestHuggingFaceTrellisModel(
   emit?: AvatarProgressEmit,
 ): Promise<TrellisModelResult> {
   const firstImage = images[0]
-  if (!firstImage) throw new Error('Hugging Face Pixal3D requires at least one image')
+  if (!firstImage) throw new Error('3D-сборке нужно хотя бы одно фото')
 
-  await emitProgress(emit, 'trellis_connect', 61, 'Подключаемся к Pixal3D')
+  await emitProgress(emit, 'trellis_connect', 61, 'Подключаем модуль 3D-сборки')
   const pixal3d = await connectHuggingFaceTrellisClient()
   const gradio = pixal3d.gradio
   const sessionId = `doorclub-${userId}-${randomUUID()}`
 
   try {
     const queueLabel = pixal3d.queueSize === null ? '' : `, очередь ${pixal3d.queueSize}`
-    await emitProgress(emit, 'trellis_session', 65, `Запускаем сессию Pixal3D (${pixal3d.name}${queueLabel})`)
-    await emitProgress(emit, 'trellis_preprocess', 70, 'Pixal3D очищает и нормализует фото Kie')
+    await emitProgress(emit, 'trellis_session', 65, `Запускаем очередь 3D-сборки${queueLabel}`)
+    await emitProgress(emit, 'trellis_preprocess', 70, 'Очищаем и нормализуем фото')
     const imageForGeneration = await callHuggingFacePreprocessImage(gradio, firstImage)
-    await emitProgress(emit, 'trellis_generate', 78, 'Pixal3D генерирует GLB-модель')
+    await emitProgress(emit, 'trellis_generate', 78, 'Собираем 3D-модель')
     const generated = await callHuggingFaceGenerateGlb(gradio, imageForGeneration, sessionId)
 
     const glbUrl = findGlbUrl(generated, pixal3d.baseUrl)
     if (!glbUrl) throw new Error('Hugging Face Pixal3D response missing GLB URL')
 
-    await emitProgress(emit, 'trellis_upload', 90, 'Сохраняем GLB-модель Pixal3D')
+    await emitProgress(emit, 'trellis_upload', 90, 'Сохраняем 3D-модель')
     const modelUrl = await uploadModelFromUrl(
       userId,
       glbUrl,
@@ -1733,7 +1749,7 @@ async function requestPrivateTrellisModel(
     headers.Authorization = `Bearer ${process.env.TRELLIS_WORKER_TOKEN}`
   }
 
-  await emitProgress(emit, 'trellis_generate', 70, 'Отправляем фото Kie в 3D worker')
+  await emitProgress(emit, 'trellis_generate', 70, 'Отправляем фото в 3D-сборку')
   const response = await fetch(new URL('/generate', workerUrl).toString(), {
     method: 'POST',
     headers,
@@ -1793,7 +1809,7 @@ async function requestPrivateTrellisModel(
       downloadHeaders.Authorization = `Bearer ${process.env.TRELLIS_WORKER_TOKEN}`
     }
 
-    await emitProgress(emit, 'trellis_upload', 90, 'Сохраняем GLB-модель 3D worker')
+    await emitProgress(emit, 'trellis_upload', 90, 'Сохраняем 3D-модель')
     const modelUrl = await uploadModelFromUrl(userId, body.modelUrl, workerUrl, downloadHeaders)
     return {
       modelUrl,
@@ -1802,7 +1818,7 @@ async function requestPrivateTrellisModel(
     }
   }
 
-  await emitProgress(emit, 'trellis_upload', 90, 'Сохраняем GLB-модель 3D worker')
+  await emitProgress(emit, 'trellis_upload', 90, 'Сохраняем 3D-модель')
   const modelUrl = await uploadModelBytes(userId, await response.arrayBuffer(), contentType || 'model/gltf-binary')
   return { modelUrl, format: 'glb', triangleCount: null }
 }
@@ -1819,7 +1835,7 @@ async function requestTrellisModelFromImages(
     return requestHuggingFaceTrellisModel(userId, images, emit)
   }
 
-  await emitProgress(emit, 'trellis_connect', 61, 'Подключаемся к 3D worker')
+  await emitProgress(emit, 'trellis_connect', 61, 'Подключаем модуль 3D-сборки')
   return requestPrivateTrellisModel(userId, images, emit)
 }
 
@@ -1912,10 +1928,10 @@ async function generateAndSaveAvatarFromTrellisImages(
         autorig,
       }
     } else {
-      trellis = { status: 'skipped', error: 'Pixal3D generation is disabled' }
+      trellis = { status: 'skipped', error: '3D-сборка выключена' }
     }
   } catch (error) {
-    const message = formatExternalError(error, 'Pixal3D generation failed')
+    const message = formatExternalError(error, '3D-сборка не удалась')
     console.error('[Avatar Pixal3D] Error:', message)
     trellis = { status: 'failed', error: message }
   }

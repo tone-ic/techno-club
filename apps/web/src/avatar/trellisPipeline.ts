@@ -150,7 +150,7 @@ export async function generateTrellisAvatarStream(
   onEvent: (event: AvatarPipelineEvent) => void,
 ): Promise<StreamedTrellisAvatarResult> {
   const accessToken = await getFreshAccessToken()
-  if (!accessToken) throw new Error('Нужна авторизация для генерации Pixal3D-модели')
+  if (!accessToken) throw new Error('Нужна авторизация для генерации 3D-модели')
 
   const response = await fetch(`${API_URL}/avatar/generate-stream`, {
     method: 'POST',
@@ -908,6 +908,11 @@ function cleanExternalErrorMessage(value: string): string {
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
     .replace(/&amp;/g, '&')
+    .replace(/Hugging Face Pixal3D/gi, 'модуль 3D-сборки')
+    .replace(/Pixal3D-Server/gi, 'модуль 3D-сборки')
+    .replace(/Pixal3D/gi, 'модуль 3D-сборки')
+    .replace(/TRELLIS\.?2?/gi, 'модуль 3D-сборки')
+    .replace(/\bGLB\b/gi, '3D-модель')
     .replace(/\s+/g, ' ')
     .trim()
 }
@@ -924,15 +929,15 @@ function formatGradioError(error: unknown): string {
   }
 
   try {
-    return cleanExternalErrorMessage(JSON.stringify(error) ?? 'Hugging Face Pixal3D generation failed')
+    return cleanExternalErrorMessage(JSON.stringify(error) ?? '3D-сборка не удалась')
   } catch {
-    return 'Hugging Face Pixal3D generation failed'
+    return '3D-сборка не удалась'
   }
 }
 
 async function mirrorTrellisModel(temporaryModelUrl: string) {
   const accessToken = await getFreshAccessToken()
-  if (!accessToken) throw new Error('Нужна авторизация для сохранения Pixal3D-модели')
+  if (!accessToken) throw new Error('Нужна авторизация для сохранения 3D-модели')
 
   const response = await fetch(`${API_URL}/avatar/mirror-model`, {
     method: 'POST',
@@ -977,7 +982,7 @@ async function mirrorTrellisModel(temporaryModelUrl: string) {
 
 async function apiJson<T>(path: string, init: RequestInit): Promise<T> {
   const accessToken = await getFreshAccessToken()
-  if (!accessToken) throw new Error('Нужна авторизация для генерации Pixal3D-модели')
+  if (!accessToken) throw new Error('Нужна авторизация для генерации 3D-модели')
 
   const response = await fetch(`${API_URL}${path}`, {
     ...init,

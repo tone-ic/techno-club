@@ -2449,9 +2449,9 @@ function OutfitModal({ onClose, onDone }: { onClose: () => void; onDone: (until:
         sourceImage: fullbody,
         kieImage: null,
         progress: 22,
-        message: 'Быстрый аватар готов как fallback',
+        message: 'Быстрый аватар готов',
       })
-      setNotice({ tone: 'pending', message: 'Отправляем фото в Kie' })
+      setNotice({ tone: 'pending', message: 'Подготавливаем фото' })
 
       const result = await generateTrellisAvatarStream(fullbody, fallback.config, (event) => {
         if (event.type === 'result') return
@@ -2470,12 +2470,12 @@ function OutfitModal({ onClose, onDone }: { onClose: () => void; onDone: (until:
       if (result.trellis.status === 'generated') {
         setNotice({
           tone: result.autorig?.status === 'failed' ? 'warning' : 'success',
-          message: `Pixal3D модель готова. ${formatOutfitAutorigMessage(result.autorig ?? result.avatar.autorig ?? null)}`,
+          message: `3D-модель готова. ${formatOutfitAutorigMessage(result.autorig ?? result.avatar.autorig ?? null)}`,
         })
       } else {
         setNotice({
           tone: 'warning',
-          message: `Pixal3D не вернул 3D-модель, оставили быстрый аватар. ${cleanOutfitGenerationDetails(result.trellis.error ?? '')}`.trim(),
+          message: `3D-модель не получилась, оставили быстрый аватар. ${cleanOutfitGenerationDetails(result.trellis.error ?? '')}`.trim(),
         })
       }
       setStep('preview')
@@ -2635,7 +2635,7 @@ function OutfitModal({ onClose, onDone }: { onClose: () => void; onDone: (until:
         <div style={{fontSize:11,color:'#e040fb',letterSpacing:3,marginBottom:8}}>СМЕНА ОБРАЗА</div>
         <div style={{fontSize:20,fontWeight:700}}>{step==='saving' ? 'Сохраняем...' : 'Собираем персонажа...'}</div>
         <div style={{fontSize:13,color:'#888',marginTop:12,textAlign:'center',lineHeight:1.6,maxWidth:380}}>
-          {step==='saving' ? 'Секунду' : notice?.message ?? 'Генерируем 3D-модель в Pixal3D'}
+          {step==='saving' ? 'Секунду' : notice?.message ?? 'Собираем 3D-модель'}
         </div>
         {step==='generating' && <OutfitGenerationProcessView process={generationProcess} />}
         {error && <div style={{color:'#ff4444',fontSize:13,marginTop:12,textAlign:'center',maxWidth:360}}>{error}</div>}
@@ -2670,12 +2670,14 @@ function isOutfitKiePreparationError(message: string): boolean {
 function cleanOutfitGenerationDetails(details: string): string {
   return details
     .replace(/<[^>]*>/g, ' ')
-    .replace(/KIE_API_KEYS/g, 'ключи сервиса генерации')
-    .replace(/KIE/gi, 'Kie')
-    .replace(/Hugging Face Pixal3D/gi, 'Pixal3D')
-    .replace(/Hugging Face TRELLIS\.?2?/gi, 'Pixal3D')
-    .replace(/TRELLIS\.?2?/gi, 'Pixal3D')
-    .replace(/GLB/gi, '3D-модель')
+    .replace(/KIE_API_KEYS/g, 'ключи модуля генерации')
+    .replace(/Hugging Face Pixal3D/gi, 'модуль 3D-сборки')
+    .replace(/Hugging Face TRELLIS\.?2?/gi, 'модуль 3D-сборки')
+    .replace(/Pixal3D/gi, 'модуль 3D-сборки')
+    .replace(/TRELLIS\.?2?/gi, 'модуль 3D-сборки')
+    .replace(/\bKIE\b/gi, 'модуль подготовки фото')
+    .replace(/ENOENT: no such file or directory, open '[^']*rigged\.(?:glb|3D-модель)'/gi, 'подготовка движений не создала файл 3D-модели')
+    .replace(/\bGLB\b/gi, '3D-модель')
     .replace(/Blender autorig/gi, 'подготовка движений')
     .replace(/\s+/g, ' ')
     .trim()
@@ -2683,7 +2685,7 @@ function cleanOutfitGenerationDetails(details: string): string {
 
 function formatOutfitGenerationError(message: string): string {
   if (isOutfitKiePreparationError(message)) {
-    return `Kie не подготовил фото для Pixal3D. ${cleanOutfitGenerationDetails(message)}`.trim()
+    return `Не удалось подготовить фото для 3D-модели. ${cleanOutfitGenerationDetails(message)}`.trim()
   }
   return cleanOutfitGenerationDetails(message)
 }
@@ -2719,17 +2721,17 @@ function processOutfitPipelineEvent(
 function OutfitGenerationProcessView({ process }: { process: OutfitGenerationProcess }) {
   const stages: Array<{ key: OutfitPipelineStage; label: string }> = [
     { key: 'source', label: 'Исходное фото' },
-    { key: 'fallback', label: 'Fallback' },
-    { key: 'kie_upload', label: 'Kie upload' },
-    { key: 'kie_create', label: 'Kie task' },
-    { key: 'kie_wait', label: 'Kie generation' },
-    { key: 'kie_download', label: 'Kie download' },
-    { key: 'kie_done', label: 'Kie photo' },
-    { key: 'trellis_connect', label: 'Pixal3D connect' },
-    { key: 'trellis_session', label: 'Pixal3D session' },
-    { key: 'trellis_preprocess', label: 'Pixal3D preprocess' },
-    { key: 'trellis_generate', label: 'Pixal3D GLB' },
-    { key: 'trellis_upload', label: 'GLB save' },
+    { key: 'fallback', label: 'Быстрый аватар' },
+    { key: 'kie_upload', label: 'Загрузка фото' },
+    { key: 'kie_create', label: 'Подготовка' },
+    { key: 'kie_wait', label: 'Обработка фото' },
+    { key: 'kie_download', label: 'Получение фото' },
+    { key: 'kie_done', label: 'Фото готово' },
+    { key: 'trellis_connect', label: '3D подключение' },
+    { key: 'trellis_session', label: 'Очередь сборки' },
+    { key: 'trellis_preprocess', label: 'Нормализация' },
+    { key: 'trellis_generate', label: '3D сборка' },
+    { key: 'trellis_upload', label: 'Сохранение модели' },
     { key: 'autorig', label: 'Движения' },
     { key: 'save', label: 'Сохранение' },
     { key: 'done', label: 'Готово' },
@@ -2765,7 +2767,7 @@ function OutfitGenerationProcessView({ process }: { process: OutfitGenerationPro
 
       <div style={outfitModalStyles.pipelineImages}>
         {process.sourceImage && <OutfitPipelineImage label="исходное фото" src={process.sourceImage} />}
-        {process.kieImage && <OutfitPipelineImage label="фото из Kie" src={process.kieImage} />}
+        {process.kieImage && <OutfitPipelineImage label="подготовленное фото" src={process.kieImage} />}
       </div>
 
       <div style={outfitModalStyles.pipelinePlaceholder}>
@@ -2785,9 +2787,9 @@ function OutfitPipelineImage({ label, src }: { label: string; src: string }) {
 }
 
 function formatOutfitPipelineHint(stage: OutfitPipelineStage): string {
-  if (stage === 'fallback') return 'Локальный аватар готов как fallback'
-  if (stage.startsWith('kie_')) return 'Kie готовит фото, которое пойдёт в Pixal3D'
-  if (stage.startsWith('trellis_')) return 'Pixal3D строит 3D-модель по фото из Kie'
+  if (stage === 'fallback') return 'Быстрый аватар готов'
+  if (stage.startsWith('kie_')) return 'Готовим фото для 3D-модели'
+  if (stage.startsWith('trellis_')) return 'Собираем 3D-модель'
   if (stage === 'autorig') return 'Подготавливаем модель для движения'
   if (stage === 'save') return 'Сохраняем аватар'
   if (stage === 'done') return '3D-модель готова для персонажа'
