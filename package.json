@@ -1,0 +1,29 @@
+{
+  "name": "techno-club",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently \"pnpm dev:web\" \"pnpm dev:server\" \"pnpm dev:api\"",
+    "dev:web": "pnpm --filter web dev",
+    "dev:server": "pnpm --filter game-server dev",
+    "dev:api": "pnpm --filter api dev",
+    "build": "pnpm --filter web build && pnpm --filter game-server build && pnpm --filter api build",
+    "build:web": "pnpm --filter web build",
+    "lint": "pnpm -r lint",
+    "typecheck": "pnpm -r typecheck",
+    "clean": "pnpm -r clean && rm -rf node_modules"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.0",
+    "typescript": "^5.5.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "ffmpeg-static"
+    ]
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  }
+}

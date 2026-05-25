@@ -1,0 +1,975 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <title>DOOR//CLUB — презентация функций проекта</title>
+  <style>
+    @page {
+      size: 13.333in 7.5in;
+      margin: 0;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      margin: 0;
+      padding: 0;
+      background: #07070f;
+      color: #f3f3f7;
+      font-family: "Segoe UI", Arial, sans-serif;
+    }
+
+    body {
+      counter-reset: slide;
+    }
+
+    .slide {
+      position: relative;
+      width: 13.333in;
+      height: 7.5in;
+      padding: 0.55in 0.72in 0.52in;
+      overflow: hidden;
+      page-break-after: always;
+      background:
+        linear-gradient(115deg, rgba(224, 64, 251, 0.16), rgba(25, 215, 255, 0.06) 38%, rgba(8, 8, 18, 0) 70%),
+        radial-gradient(circle at 84% 18%, rgba(0, 230, 118, 0.18), transparent 26%),
+        linear-gradient(180deg, #080812 0%, #0e0e1b 100%);
+    }
+
+    .slide::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(255,255,255,0.035) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.026) 1px, transparent 1px);
+      background-size: 42px 42px;
+      mask-image: linear-gradient(180deg, rgba(0,0,0,0.55), transparent 78%);
+      pointer-events: none;
+    }
+
+    .slide::after {
+      counter-increment: slide;
+      content: counter(slide, decimal-leading-zero);
+      position: absolute;
+      right: 0.55in;
+      bottom: 0.34in;
+      color: rgba(216,247,255,0.52);
+      font-family: "Courier New", monospace;
+      font-size: 12px;
+      letter-spacing: 0.08em;
+    }
+
+    .kicker {
+      position: relative;
+      z-index: 1;
+      color: #19d7ff;
+      font-family: "Courier New", monospace;
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      margin-bottom: 0.22in;
+    }
+
+    h1,
+    h2,
+    h3,
+    p,
+    ul,
+    .row,
+    .cards,
+    .flow,
+    .timeline,
+    .chapter {
+      position: relative;
+      z-index: 1;
+    }
+
+    h1 {
+      margin: 0;
+      max-width: 8.9in;
+      font-size: 56px;
+      line-height: 0.96;
+      letter-spacing: 0;
+      color: #ffffff;
+    }
+
+    h2 {
+      margin: 0 0 0.22in;
+      max-width: 9.5in;
+      font-size: 36px;
+      line-height: 1.05;
+      letter-spacing: 0;
+      color: #ffffff;
+    }
+
+    h3 {
+      margin: 0 0 0.08in;
+      font-size: 18px;
+      line-height: 1.2;
+      color: #ffffff;
+    }
+
+    p {
+      margin: 0;
+      color: #c7c9d6;
+      font-size: 20px;
+      line-height: 1.45;
+    }
+
+    ul {
+      margin: 0.12in 0 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    li {
+      position: relative;
+      margin: 0 0 0.105in;
+      padding-left: 0.28in;
+      color: #d9dbea;
+      font-size: 20px;
+      line-height: 1.32;
+    }
+
+    li::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 0.18em;
+      width: 0.11in;
+      height: 0.11in;
+      border-radius: 50%;
+      background: #e040fb;
+      box-shadow: 0 0 12px rgba(224,64,251,0.7);
+    }
+
+    .lead {
+      max-width: 8.4in;
+      margin-top: 0.28in;
+      font-size: 23px;
+      color: #d8f7ff;
+    }
+
+    .muted {
+      color: #85889a;
+    }
+
+    .accent {
+      color: #e040fb;
+    }
+
+    .cyan {
+      color: #19d7ff;
+    }
+
+    .green {
+      color: #75ff9b;
+    }
+
+    .small {
+      font-size: 15px;
+      line-height: 1.35;
+    }
+
+    .mono {
+      font-family: "Courier New", monospace;
+      letter-spacing: 0.03em;
+    }
+
+    .title-meta {
+      position: absolute;
+      left: 0.72in;
+      bottom: 0.52in;
+      z-index: 1;
+      display: flex;
+      gap: 0.24in;
+      align-items: center;
+      color: #8f95aa;
+      font-family: "Courier New", monospace;
+      font-size: 13px;
+      letter-spacing: 0.08em;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 0.34in;
+      padding: 0 0.16in;
+      border: 1px solid rgba(255,255,255,0.16);
+      border-radius: 4px;
+      background: rgba(13,13,26,0.76);
+      color: #d8f7ff;
+      font-family: "Courier New", monospace;
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+    }
+
+    .row {
+      display: grid;
+      grid-template-columns: 1.04fr 0.96fr;
+      gap: 0.36in;
+      align-items: start;
+    }
+
+    .row.wide-left {
+      grid-template-columns: 1.18fr 0.82fr;
+    }
+
+    .row.equal {
+      grid-template-columns: 1fr 1fr;
+    }
+
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 0.16in;
+      margin-top: 0.24in;
+    }
+
+    .cards.two {
+      grid-template-columns: repeat(2, 1fr);
+    }
+
+    .card {
+      min-height: 1.35in;
+      padding: 0.18in;
+      border: 1px solid rgba(255,255,255,0.13);
+      border-radius: 7px;
+      background: rgba(8,8,18,0.68);
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.02);
+    }
+
+    .card p {
+      font-size: 16px;
+      line-height: 1.35;
+      color: #bfc2d2;
+    }
+
+    .stat-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 0.14in;
+    }
+
+    .stat {
+      min-height: 0.95in;
+      padding: 0.16in;
+      border-radius: 7px;
+      border: 1px solid rgba(25,215,255,0.2);
+      background: rgba(7,12,25,0.78);
+    }
+
+    .stat strong {
+      display: block;
+      margin-bottom: 0.04in;
+      color: #19d7ff;
+      font-family: "Courier New", monospace;
+      font-size: 20px;
+    }
+
+    .stat span {
+      color: #c7c9d6;
+      font-size: 15px;
+      line-height: 1.32;
+    }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 0.1in;
+      margin-top: 0.28in;
+    }
+
+    .flow .step {
+      position: relative;
+      min-height: 1.24in;
+      padding: 0.16in;
+      border-radius: 7px;
+      border: 1px solid rgba(224,64,251,0.26);
+      background: rgba(12,12,28,0.74);
+    }
+
+    .step .num {
+      display: block;
+      color: #e040fb;
+      font-family: "Courier New", monospace;
+      font-size: 13px;
+      font-weight: 700;
+      margin-bottom: 0.06in;
+    }
+
+    .step strong {
+      display: block;
+      color: #ffffff;
+      font-size: 16px;
+      line-height: 1.1;
+      margin-bottom: 0.05in;
+    }
+
+    .step span {
+      display: block;
+      color: #b9bdca;
+      font-size: 13px;
+      line-height: 1.28;
+    }
+
+    .timeline {
+      margin-top: 0.26in;
+      border-left: 2px solid rgba(224,64,251,0.48);
+      padding-left: 0.26in;
+    }
+
+    .timeline-item {
+      position: relative;
+      margin-bottom: 0.18in;
+      padding: 0.14in 0.16in;
+      border-radius: 7px;
+      background: rgba(8,8,18,0.7);
+      border: 1px solid rgba(255,255,255,0.11);
+    }
+
+    .timeline-item::before {
+      content: "";
+      position: absolute;
+      left: -0.34in;
+      top: 0.21in;
+      width: 0.14in;
+      height: 0.14in;
+      border-radius: 50%;
+      background: #e040fb;
+      box-shadow: 0 0 12px rgba(224,64,251,0.7);
+    }
+
+    .timeline-item strong {
+      color: #ffffff;
+      display: block;
+      font-size: 18px;
+      margin-bottom: 0.04in;
+    }
+
+    .timeline-item span {
+      color: #c4c7d7;
+      font-size: 16px;
+      line-height: 1.35;
+    }
+
+    .diagram {
+      min-height: 4.6in;
+      padding: 0.22in;
+      border: 1px solid rgba(255,255,255,0.14);
+      border-radius: 7px;
+      background: rgba(4,4,12,0.62);
+    }
+
+    .diagram-box {
+      margin-bottom: 0.12in;
+      padding: 0.13in 0.15in;
+      border-radius: 6px;
+      border: 1px solid rgba(25,215,255,0.2);
+      background: rgba(12,20,36,0.75);
+      color: #d8f7ff;
+      font-family: "Courier New", monospace;
+      font-size: 14px;
+      line-height: 1.35;
+    }
+
+    .chapter {
+      display: inline-block;
+      margin-bottom: 0.26in;
+      padding: 0.08in 0.18in;
+      border: 1px solid rgba(117,255,155,0.36);
+      border-radius: 5px;
+      color: #75ff9b;
+      background: rgba(0,230,118,0.08);
+      font-family: "Courier New", monospace;
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    .quote {
+      margin-top: 0.28in;
+      padding: 0.2in 0.24in;
+      border-left: 4px solid #e040fb;
+      background: rgba(224,64,251,0.09);
+      color: #d8f7ff;
+      font-size: 21px;
+      line-height: 1.42;
+    }
+
+    .footer-note {
+      position: absolute;
+      left: 0.72in;
+      bottom: 0.34in;
+      z-index: 1;
+      color: rgba(216,247,255,0.5);
+      font-family: "Courier New", monospace;
+      font-size: 11px;
+      letter-spacing: 0.08em;
+    }
+  </style>
+</head>
+<body>
+  <section class="slide">
+    <div class="kicker">DOOR//CLUB / Feature Presentation</div>
+    <h1>Функции и особенности проекта</h1>
+    <p class="lead">PDF-презентация реализованных возможностей виртуального техно-клуба: от первого входа и создания 3D-персонажа до клуба, музыки, BPM, танцев, proximity voice и DJ-эфира.</p>
+    <div class="title-meta">
+      <span>Актуально на 08.05.2026</span>
+      <span>React + Three.js + Supabase + LiveKit + WebSocket</span>
+    </div>
+  </section>
+
+  <section class="slide">
+    <div class="kicker">Порядок прохождения</div>
+    <h2>Как пользователь движется по приложению</h2>
+    <div class="flow">
+      <div class="step"><span class="num">01</span><strong>Вход</strong><span>Supabase Auth: email magic link или Google OAuth.</span></div>
+      <div class="step"><span class="num">02</span><strong>Фото</strong><span>Камера или загрузка из галереи, нормализация снимка.</span></div>
+      <div class="step"><span class="num">03</span><strong>Аватар</strong><span>Локальный PS2 fallback и попытка TRELLIS GLB.</span></div>
+      <div class="step"><span class="num">04</span><strong>Улица</strong><span>3D-сцена, очередь, фейсконтроль, голос рядом.</span></div>
+      <div class="step"><span class="num">05</span><strong>Клуб</strong><span>Синхронная музыка, BPM, танцы, DJ, роли и зоны.</span></div>
+    </div>
+    <div class="quote">Главная идея: приложение ведет игрока не через меню, а через “ночь в клубе” — он появляется как персонаж, проходит дверь, слышит пространство и двигается внутри общей 3D-сцены.</div>
+  </section>
+
+  <section class="slide">
+    <div class="kicker">01 / Авторизация</div>
+    <h2>Вход в DOOR//CLUB</h2>
+    <div class="row">
+      <div>
+        <ul>
+          <li>Экран логина поддерживает email magic link через Supabase OTP.</li>
+          <li>Добавлен вход через Google OAuth с редиректом обратно в приложение.</li>
+          <li>После восстановления сессии приложение заполняет локальный store: `userId` и `displayName`.</li>
+          <li>Маршруты защищены: без авторизации пользователь возвращается на `/login`.</li>
+        </ul>
+      </div>
+      <div class="stat-grid">
+        <div class="stat"><strong>Auth</strong><span>Supabase хранит сессию и проверяет JWT для API-запросов.</span></div>
+        <div class="stat"><strong>Session</strong><span>React приложение ждет `authReady`, затем открывает маршруты.</span></div>
+        <div class="stat"><strong>Display name</strong><span>Имя берется из metadata или заменяется на “Аноним”.</span></div>
+        <div class="stat"><strong>Age gate</strong><span>Маршрут `/age-gate` уже есть, сейчас это экран-заглушка.</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="slide">
+    <div class="kicker">02 / Камера</div>
+    <h2>Создание аватара начинается с одного фото</h2>
+    <div class="row wide-left">
+      <div>
+        <ul>
+          <li>Пользователь делает снимок в полный рост через `getUserMedia` или загружает изображение из галереи.</li>
+          <li>Клиент сжимает кадр в JPEG и пытается нормализовать fullbody и face варианты.</li>
+          <li>Один исходный кадр используется и для силуэта тела, и для извлечения лица.</li>
+          <li>Перед генерацией есть экран review: пользователь может переснять фото.</li>
+        </ul>
+      </div>
+      <div class="diagram">
+        <div class="diagram-box">camera / gallery input</div>
+        <div class="diagram-box">compressCameraPhoto(canvas)</div>
+        <div class="diagram-box">normalizeFullBodyPhoto(dataUrl)</div>
+        <div class="diagram-box">normalizeFacePhoto(dataUrl)</div>
+        <div class="diagram-box">review → generate avatar</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="slide">
+    <div class="kicker">03 / Генерация персонажа</div>
+    <h2>Фото превращается в 3D-персонажа</h2>
+    <div class="cards">
+      <div class="card">
+        <h3>Локальный fallback</h3>
+        <p>Система анализирует цвета кожи, волос, верха, низа и обуви; выбирает тип тела, головы, прически, одежды и mood.</p>
+      </div>
+      <div class="card">
+        <h3>TRELLIS GLB</h3>
+        <p>Если доступен TRELLIS / Hugging Face ZeroGPU или приватный worker, fullbody фото отправляется на image-to-3D генерацию GLB.</p>
+      </div>
+      <div class="card">
+        <h3>Blender autorig</h3>
+        <p>API может прогнать GLB через Blender autorig, загрузить rigged модель в Supabase Storage и заменить modelUrl.</p>
+      </div>
+    </div>
+    <p class="lead">Пайплайн ориентирован на сохранение внешности и одежды по фотографии, но при сбое внешнего сервиса пользователь все равно получает процедурный PS2-персонаж и может войти в мир.</p>
+  </section>
+
+  <section class="slide">
+    <div class="kicker">03 / Детали аватара</div>
+    <h2>Что сохраняется в avatar config</h2>
+    <div class="row equal">
+      <div>
+        <ul>
+          <li>Цвет кожи, волос, верха, низа и обуви.</li>
+          <li>Стиль тела, головы, волос, одежды и обуви.</li>
+          <li>Face texture и body texture, собранные из фотографии.</li>
+          <li>`modelUrl` для TRELLIS/GLB, если модель успешно создана.</li>
+          <li>`autorig` статус: generated, disabled или failed.</li>
+        </ul>
+      </div>
+      <div>
+        <div class="timeline">
+          <div class="timeline-item"><strong>Supabase DB</strong><span>`avatars.config_json` хранит весь внешний вид персонажа.</span></div>
+          <div class="timeline-item"><strong>Supabase Storage</strong><span>GLB-модели зеркалируются из временных URL в постоянное хранилище.</span></div>
+          <div class="timeline-item"><strong>Profile binding</strong><span>API обновляет `profiles.avatar_id`, чтобы профиль указывал на актуальный аватар.</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="slide">
+    <div class="kicker">04 / Preview</div>
+    <h2>3D-превью перед входом в мир</h2>
+    <div class="row">
+      <div>
+        <ul>
+          <li>Компонент `AvatarPreview3D` рендерит персонажа в отдельном Three.js canvas.</li>
+          <li>Если есть GLB, процедурная модель скрывается, а сгенерированный объект масштабируется и центрируется.</li>
+          <li>Если GLB не загрузился, fallback остается видимым.</li>
+          <li>Пользователь может вращать модель drag-жестом; при бездействии аватар мягко покачивается.</li>
+        </ul>
+      </div>
+      <div class="stat-grid">
+        <div class="stat"><strong>3D</strong><span>Three.js renderer, lights, transparent background.</span></div>
+        <div class="stat"><strong>Texture</strong><span>Face/body textures применяются к зонам модели.</span></div>
+        <div class="stat"><strong>Fallback</strong><span>Процедурная модель остается страховкой.</span></div>
+        <div class="stat"><strong>Action</strong><span>Подтвердить, переснять или перейти “на улицу”.</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="slide">
+    <div class="kicker">05 / Улица</div>
+    <h2>Первая игровая сцена: вход у клуба</h2>
+    <div class="cards">
+      <div class="card">
+        <h3>3D-окружение</h3>
+        <p>Улица, дверь, неон LEFT BANK, охрана, очередь, сетка пола, туман и цветные источники света.</p>
+      </div>
+      <div class="card">
+        <h3>Управление</h3>
+        <p>WASD/стрелки, мобильный joystick, поворот камеры мышью или touch, pinch/scroll для дистанции камеры.</p>
+      </div>
+      <div class="card">
+        <h3>Музыка снаружи</h3>
+        <p>Чем ближе игрок к двери, тем громче и ярче слышна музыка: меняется gain и low-pass filter.</p>
+      </div>
+    </div>
+    <p class="lead">Снаружи игрок уже видит других участников, их имена, внешний вид и анимации движения.</p>
+  </section>
+
+  <section class="slide">
+    <div class="kicker">06 / Очередь</div>
+    <h2>Очередь и фейсконтроль</h2>
+    <div class="row wide-left">
+      <div>
+        <ul>
+          <li>Кнопка “Войти” отправляет игрока в очередь на WebSocket game-server.</li>
+          <li>Игрок видит свой номер в очереди и может выйти из нее.</li>
+          <li>Фейсконтроль видит список гостей, их аватар, позицию в очереди и внешний вид.</li>
+          <li>Можно впустить гостя или отказать с причиной: dress code, overcrowded, behavior, closed event, vibe check.</li>
+          <li>При отказе включается cooldown на 10 минут.</li>
+        </ul>
+      </div>
+      <div class="diagram">
+        <div class="diagram-box">guest → joinQueue</div>
+        <div class="diagram-box">server → queueSnapshot()</div>
+        <div class="diagram-box">bouncer → approve / deny</div>
+        <div class="diagram-box">approved → admitted → /club</div>
+        <div class="diagram-box">denied → cooldown timer</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="slide">
+    <div class="kicker">07 / Bouncer UI</div>
+    <h2>Отдельная панель фейсконтроля</h2>
+    <div class="row equal">
+      <div>
+        <ul>
+          <li>Режим фейсконтроля включается ролью `bouncer`.</li>
+          <li>Панель делится на очередь, центральное 3D-превью выбранного гостя и лог действий.</li>
+          <li>В AvatarMini можно рассмотреть персонажа в 3D, включая лицо и одежду.</li>
+          <li>Одобрение отправляет игрока в клуб, отказ возвращает причину и cooldown.</li>
+        </ul>
+      </div>
+      <div class="stat-grid">
+        <div class="stat"><strong>Queue list</strong><span>Имя, номер, цвета, face/body/model URL.</span></div>
+        <div class="stat"><strong>3D check</strong><span>Мини-сцена для визуального dress/vibe review.</span></div>
+        <div class="stat"><strong>Reasons</strong><span>Стандартизированные причины отказа.</span></div>
+        <div class="stat"><strong>Audit</strong><span>Локальный лог последних действий панели.</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="slide">
+    <div class="kicker">08 / Смена образа</div>
+    <h2>Обновление одежды и лица уже внутри приложения</h2>
+    <div class="row">
+      <div>
+        <ul>
+          <li>На улице есть кнопка “Образ”: игрок может переснять fullbody и face фото.</li>
+          <li>Система извлекает новые цвета верха и низа, сжимает body texture и обновляет face texture.</li>
+          <li>Новый образ сохраняется в Supabase `avatars` через upsert.</li>
+          <li>Обновление рассылается другим игрокам через `avatarUpdate`.</li>
+          <li>После сохранения действует cooldown 10 минут, чтобы не спамить обновлениями.</li>
+        </ul>
+      </div>
+      <div class="diagram">
+        <div class="diagram-box">fullbody photo</div>
+        <div class="diagram-box">face crop</div>
+        <div class="diagram-box">extractDominantColor(top/bottom)</div>
+        <div class="diagram-box">Supabase upsert</div>
+        <div class="diagram-box">gameClient.sendAvatarUpdate()</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="slide">
+    <div class="kicker">09 / Мультиплеер</div>
+    <h2>Состояние игроков в реальном времени</h2>
+    <div class="cards">
+      <div class="card">
+        <h3>WebSocket game-server</h3>
+        <p>Сервер хранит игроков, комнаты outside/club, очередь, роли, позиции, движение и текущую музыку.</p>
+      </div>
+      <div class="card">
+        <h3>Сглаживание движения</h3>
+        <p>Клиент отправляет позицию и поворот, удаленные игроки плавно интерполируются к последнему серверному состоянию.</p>
+      </div>
+      <div class="card">
+        <h3>Коллизии</h3>
+        <p>Сервер и сцена не дают игрокам накладываться друг на друга и проходить через ключевые твердые зоны.</p>
+      </div>
+    </div>
+    <p class="lead">Обновления идут событийно: `playerJoined`, `playerMoved`, `playerLeft`, `avatarUpdated`, `queueUpdate`, `musicSync`.</p>
+  </section>
+
+  <section class="slide">
+    <div class="kicker">10 / Клуб</div>
+    <h2>Главная сцена: танцпол, DJ, бар и VIP</h2>
+    <div class="row">
+      <div>
+        <ul>
+          <li>Клуб построен как полноэкранная Three.js сцена с PS2/неоновой эстетикой.</li>
+          <li>Есть танцпол из реактивных плиток, DJ booth, бар, VIP-зона, световые балки и дым.</li>
+          <li>HUD показывает текущую зону: танцпол, DJ booth, бар или VIP.</li>
+          <li>В клубе видны NPC-танцоры, DJ, bartender и другие игроки.</li>
+          <li>Кнопка “наружу” возвращает игрока на улицу и сбрасывает admission session.</li>
+        </ul>
+      </div>
+      <div class="stat-grid">
+        <div class="stat"><strong>Zones</strong><span>floor, dj, bar, vip по координатам игрока.</span></div>
+        <div class="stat"><strong>Lighting</strong><span>Пульсирующие beams, point lights и smoke sprites.</span></div>
+        <div class="stat"><strong>NPC</strong><span>Сцена не пустая даже без других игроков.</span></div>
+        <div class="stat"><strong>HUD</strong><span>Зона, BPM, имя, player count, dance controls.</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="slide">
+    <div class="kicker">11 / Музыка</div>
+    <h2>Синхронный музыкальный слой</h2>
+    <div class="row wide-left">
+      <div>
+        <ul>
+          <li>В приложении есть глобальный MusicPlayer, активный на `/outside` и `/club`.</li>
+          <li>Пять локальных techno-треков используются как fallback, когда live DJ stream не активен.</li>
+          <li>Сервер рассылает `trackIdx`, `startedAt` и `serverNow`, чтобы клиенты держали общий таймлайн.</li>
+          <li>Клиент корректирует drift через seek или небольшую поправку playbackRate.</li>
+          <li>Громкость меняется через Web Audio GainNode, не ломая currentTime.</li>
+        </ul>
+      </div>
+      <div class="diagram">
+        <div class="diagram-box">server musicTrackIdx</div>
+        <div class="diagram-box">musicStartedAt</div>
+        <div class="diagram-box">client time ping / offset</div>
+        <div class="diagram-box">alignMusicToTimeline()</div>
+        <div class="diagram-box">MUSIC_OUTPUT_EVENT</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="slide">
+    <div class="kicker">12 / BPM</div>
+    <h2>Определение BPM и следование ритмике</h2>
+    <div class="row equal">
+      <div>
+        <ul>
+          <li>LiveBpmEstimator анализирует спектральный flux в диапазоне ударных частот.</li>
+          <li>Onset-события собираются в окно, интервалы нормализуются в диапазон 60–180 BPM.</li>
+          <li>Гистограмма кандидатов сглаживает темп и защищает от резких скачков.</li>
+          <li>Событие `music-bpm` передает BPM, source и confidence в сцены.</li>
+          <li>Сцена клуба показывает BPM в DJ zone и использует его как фазу анимации.</li>
+        </ul>
+      </div>
+      <div class="stat-grid">
+        <div class="stat"><strong>Window</strong><span>Окно анализа: 5 секунд.</span></div>
+        <div class="stat"><strong>Range</strong><span>BPM clamp: 60–180.</span></div>
+        <div class="stat"><strong>Interval</strong><span>Анализ каждые 20 мс, broadcast каждые 5 секунд.</span></div>
+        <div class="stat"><strong>Sources</strong><span>Fallback tracks или live DJ audio.</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="slide">
+    <div class="kicker">13 / Танцы</div>
+    <h2>Динамическое пританцовывание</h2>
+    <div class="cards">
+      <div class="card">
+        <h3>Idle groove</h3>
+        <p>Даже без активного танца персонажи мягко двигаются в ритм слышимой музыки.</p>
+      </div>
+      <div class="card">
+        <h3>Dance menu</h3>
+        <p>В клубе есть выбор танца: idle groove, side step, head touch groove.</p>
+      </div>
+      <div class="card">
+        <h3>Generated rigs</h3>
+        <p>Если есть GLB, `generatedAvatarRig` применяет walk, idle, dance и talk к загруженной модели.</p>
+      </div>
+    </div>
+    <p class="lead">Интенсивность танца зависит от реальной слышимой музыки: `music-output` передает intensity, а сцена умножает им движения персонажа.</p>
+  </section>
+
+  <section class="slide">
+    <div class="kicker">14 / Proximity Voice</div>
+    <h2>Голосовой чат зависит от расстояния</h2>
+    <div class="row wide-left">
+      <div>
+        <ul>
+          <li>Голосовой чат работает через LiveKit в общей комнате DJ/voice.</li>
+          <li>Есть Push-to-Talk и режим AUTO с VAD: микрофон включается при RMS выше порога и закрывается с задержкой.</li>
+          <li>Для входящего голоса каждые ~180 мс пересчитывается дистанционная громкость.</li>
+          <li>В клубе голоса тише и ближе; на улице радиус больше и потолок громкости выше.</li>
+          <li>Можно выключить входящие голоса кнопкой IN/OFF, состояние сохраняется в localStorage.</li>
+        </ul>
+      </div>
+      <div class="stat-grid">
+        <div class="stat"><strong>Club</strong><span>Full distance 0.75, max distance 3.8, ceiling 0.28.</span></div>
+        <div class="stat"><strong>Outside</strong><span>Full distance 1.15, max distance 6.8, ceiling 0.62.</span></div>
+        <div class="stat"><strong>Mic</strong><span>Echo cancellation, noise suppression, AGC, voiceIsolation.</span></div>
+        <div class="stat"><strong>Level events</strong><span>`voice-levels` питает визуальный talk feedback.</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="slide">
+    <div class="kicker">15 / Голосовая визуализация</div>
+    <h2>Рот персонажа реагирует на громкость</h2>
+    <div class="row">
+      <div>
+        <ul>
+          <li>Вместо черного прямоугольника используется PNG-рот из `public/images/voice-mouth.png`.</li>
+          <li>Масштаб mouth plane растет от текущего уровня входящего или локального голоса.</li>
+          <li>Локальный и удаленные уровни вычисляются из AnalyserNode через RMS.</li>
+          <li>Если голос ниже порога, mouth plane становится невидимым.</li>
+          <li>Для GLB-моделей дополнительно вызывается `rig.talk(talking, t, amount)`.</li>
+        </ul>
+      </div>
+      <div class="diagram">
+        <div class="diagram-box">LiveKit track</div>
+        <div class="diagram-box">AnalyserNode → RMS</div>
+        <div class="diagram-box">VOICE_LEVELS_EVENT</div>
+        <div class="diagram-box">animateTalking(group, level)</div>
+        <div class="diagram-box">PNG mouth scale + opacity</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="slide">
+    <div class="kicker">16 / DJ Booth</div>
+    <h2>Live DJ stream через LiveKit</h2>
+    <div class="row wide-left">
+      <div>
+        <ul>
+          <li>Отдельный экран `/dj` выбирает audio input: микшер, loopback, внешняя карта или виртуальный источник.</li>
+          <li>DJ публикует `dj_audio` track с high quality stereo preset, red и forceStereo.</li>
+          <li>Панель показывает room connection, live status, listener count и уровень входящего аудио.</li>
+          <li>Обычные слушатели автоматически подписываются на `dj_audio`.</li>
+          <li>Когда live DJ активен, MP3 fallback приглушается, а BPM анализ переключается на live stream.</li>
+        </ul>
+      </div>
+      <div class="stat-grid">
+        <div class="stat"><strong>Track</strong><span>name: `dj_audio`, stream: `dj`.</span></div>
+        <div class="stat"><strong>Preset</strong><span>AudioPresets.musicHighQualityStereo.</span></div>
+        <div class="stat"><strong>Meter</strong><span>Визуальный уровень по AnalyserNode.</span></div>
+        <div class="stat"><strong>Fallback</strong><span>Локальные MP3 остаются резервом.</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="slide">
+    <div class="kicker">17 / Роли и геймплей</div>
+    <h2>Роли, клубная энергия и VIP</h2>
+    <div class="cards">
+      <div class="card">
+        <h3>Role slots</h3>
+        <p>Сервер хранит занятые роли DJ, bartender и guard, проверяя доступность слота.</p>
+      </div>
+      <div class="card">
+        <h3>Club energy</h3>
+        <p>Энергия клуба постепенно падает и повышается от действий crowdHype или orderDrink.</p>
+      </div>
+      <div class="card">
+        <h3>VIP access</h3>
+        <p>VIP может открываться по роли admin/guard или по достаточному dress score аватара.</p>
+      </div>
+    </div>
+    <p class="lead">Часть геймплейных событий уже есть на сервере и в WebSocket-клиенте, даже если UI для всех действий еще можно расширять.</p>
+  </section>
+
+  <section class="slide">
+    <div class="kicker">18 / Архитектура</div>
+    <h2>Что держит проект под капотом</h2>
+    <div class="row">
+      <div class="diagram">
+        <div class="diagram-box">apps/web: React, TypeScript, Vite, Three.js, Zustand</div>
+        <div class="diagram-box">apps/game-server: WebSocket server, players, rooms, queue, music sync</div>
+        <div class="diagram-box">apps/api: Hono REST API, LiveKit tokens, avatar generation/mirroring/cleanup</div>
+        <div class="diagram-box">Supabase: Auth, profiles, avatars, Storage</div>
+        <div class="diagram-box">LiveKit: proximity voice and DJ audio tracks</div>
+      </div>
+      <div>
+        <ul>
+          <li>Frontend рендерит UI и 3D-сцены, а также анализирует звук через Web Audio API.</li>
+          <li>Game server синхронизирует позиции, очередь, роли, таймлайн музыки и события клуба.</li>
+          <li>API валидирует Supabase JWT, выпускает LiveKit токены и сохраняет результаты аватара.</li>
+          <li>Внешние AI/3D сервисы подключены с fallback-стратегией, чтобы onboarding не ломался полностью.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="slide">
+    <div class="kicker">19 / Надежность</div>
+    <h2>Fallback-и и graceful degradation</h2>
+    <div class="cards">
+      <div class="card">
+        <h3>TRELLIS недоступен</h3>
+        <p>Пользователь получает процедурный аватар, а UI показывает предупреждение вместо блокировки входа.</p>
+      </div>
+      <div class="card">
+        <h3>GLB не загрузился</h3>
+        <p>Three.js оставляет fallback-модель видимой и логирует ошибку загрузки GLB.</p>
+      </div>
+      <div class="card">
+        <h3>Live DJ недоступен</h3>
+        <p>MusicPlayer продолжает использовать локальные треки и синхронизацию по серверному таймлайну.</p>
+      </div>
+      <div class="card">
+        <h3>Автовоспроизведение заблокировано</h3>
+        <p>Audio unlock привязан к pointer/key событиям, а UI предлагает включить звук действием пользователя.</p>
+      </div>
+      <div class="card">
+        <h3>Микрофон недоступен</h3>
+        <p>VoiceChat показывает ошибку, не ломая присутствие игрока в сцене.</p>
+      </div>
+      <div class="card">
+        <h3>Фото приватны</h3>
+        <p>В онбординге явно указано, что исходные фото не публикуются; API также имеет cleanup endpoint.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="slide">
+    <div class="chapter">Отдельная глава</div>
+    <h2>Что еще можно добавить или улучшить</h2>
+    <p class="lead">Ниже — направления развития, которые логично продолжают уже существующие механики: аватары, звук, клубный геймплей, модерация и production-надежность.</p>
+    <div class="cards">
+      <div class="card">
+        <h3>Продукт</h3>
+        <p>Больше социальных действий, понятнее progression, улучшенный onboarding и завершенный age gate.</p>
+      </div>
+      <div class="card">
+        <h3>Технологии</h3>
+        <p>Стабильнее AI pipeline, автоматические тесты, мониторинг LiveKit/WebSocket/API.</p>
+      </div>
+      <div class="card">
+        <h3>Мир</h3>
+        <p>Больше интерактивных зон, роль DJ как полноценный performance-инструмент, персональные эффекты.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="slide">
+    <div class="chapter">Улучшения / Аватары и UX</div>
+    <h2>Аватары, камера и первый вход</h2>
+    <div class="row equal">
+      <div>
+        <ul>
+          <li>Доделать настоящий age gate вместо текущей заглушки.</li>
+          <li>Добавить подсказки качества фото: освещение, полный рост, лицо видно, фон не мешает.</li>
+          <li>Показать пользователю сравнение: исходное фото, fallback-аватар, TRELLIS-GLB.</li>
+          <li>Сделать очередь TRELLIS понятнее: позиция, примерное ожидание, retry без потери фото.</li>
+          <li>Добавить редактор деталей после генерации: прическа, обувь, аксессуары, цветовые правки.</li>
+        </ul>
+      </div>
+      <div>
+        <ul>
+          <li>Сделать стабильный серверный путь генерации 10/8 для всех клиентов, чтобы не зависеть от браузерного ZeroGPU.</li>
+          <li>Хранить несколько сохраненных образов и дать игроку переключаться между ними.</li>
+          <li>Добавить preview анимаций: walk, idle, dance, talk прямо на странице аватара.</li>
+          <li>Автоматически удалять временные оригиналы по расписанию и показывать статус удаления.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="slide">
+    <div class="chapter">Улучшения / Клуб и социальность</div>
+    <h2>Геймплей, роли и живой клуб</h2>
+    <div class="row equal">
+      <div>
+        <ul>
+          <li>Дать UI для уже существующих server actions: crowdHype, orderDrink, vipRequest.</li>
+          <li>Сделать роли DJ, bartender, guard и bouncer видимыми в клубе: бейджи, зоны ответственности, специальные кнопки.</li>
+          <li>Добавить полноценную VIP-механику: приглашения, приватный proximity voice, отдельная музыка/свет.</li>
+          <li>Развить бар: заказ напитков, очередь у стойки, влияние bartender на clubEnergy.</li>
+        </ul>
+      </div>
+      <div>
+        <ul>
+          <li>Добавить чат/эмоции/жесты поверх голосового общения.</li>
+          <li>Сделать сетевые танцы: синхронные групповые движения и “танцевальные баттлы”.</li>
+          <li>Добавить события вечера: peak time, guest list, закрытая вечеринка, смена DJ.</li>
+          <li>Дать bouncer/admin статистику решений и историю cooldown/ban.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="slide">
+    <div class="chapter">Улучшения / Звук и production</div>
+    <h2>Качество, масштабирование и надежность</h2>
+    <div class="row equal">
+      <div>
+        <ul>
+          <li>Добавить spatial audio panning: голоса и музыка должны не только затухать, но и приходить с направления.</li>
+          <li>Сделать sidechain/ducking: музыка немного проседает, когда рядом говорит игрок.</li>
+          <li>Показывать активных говорящих в HUD и на name tag.</li>
+          <li>Добавить отдельные комнаты или инстансы клуба при большом количестве игроков.</li>
+        </ul>
+      </div>
+      <div>
+        <ul>
+          <li>Подключить e2e/screenshot тесты для ключевых сцен: camera, outside, club, voice UI.</li>
+          <li>Добавить мониторинг API, WebSocket, LiveKit token выдачи и ошибок TRELLIS/autorig.</li>
+          <li>Завершить Admin Panel: модерация, роли, логи, состояние очереди и эвенты клуба.</li>
+          <li>Укрепить безопасность: rate limits, серверная валидация перемещений, RLS-политики и аудит storage.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="footer-note">Конец презентации / DOOR//CLUB</div>
+  </section>
+</body>
+</html>

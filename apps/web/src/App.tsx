@@ -1,0 +1,158 @@
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { useEffect, useState } from 'react'
+import type { ReactNode } from 'react'
+import { supabase } from '@/utils/supabase'
+import { isEmailAuthorizedUser } from '@/utils/emailAuth'
+import { usePlayerStore } from '@/store/playerStore'
+import { lazy, Suspense } from 'react'
+import MusicPlayer from '@/components/MusicPlayer'
+
+const LoginPage   = lazy(() => import('@/pages/LoginPage'))
+const AgeGatePage = lazy(() => import('@/pages/AgeGatePage'))
+const CameraPage  = lazy(() => import('@/pages/CameraPage'))
+const AvatarPage  = lazy(() => import('@/pages/AvatarPage'))
+const OutsidePage = lazy(() => import('@/pages/OutsidePage'))
+const ClubPage    = lazy(() => import('@/pages/ClubPage'))
+const BouncerPage = lazy(() => import('@/pages/BouncerPage'))
+const DJPage      = lazy(() => import('@/pages/DJPage'))
+const AdminPage   = lazy(() => import('@/pages/AdminPage'))
+
+function LoadingScreen() {
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      height: '100vh', color: '#e040fb', fontFamily: 'monospace', fontSize: 14,
+      background: '#0d0d1a',
+    }}>
+      DOOR//CLUB
+    </div>
+  )
+}
+
+type OnboardingState = {
+  ready: boolean
+  completed: boolean
+  underageBlocked: boolean
+}
+
+function RequireAuth({ children }: { children: ReactNode }) {
+  const { userId } = usePlayerStore()
+  if (!userId) return <Navigate to="/login" replace />
+  return <>{children}</>
+}
+
+function RequireOnboarding({ state, children }: { state: OnboardingState; children: ReactNode }) {
+  if (!state.ready) return <LoadingScreen />
+  if (!state.completed || state.underageBlocked) return <Navigate to="/age-gate" replace />
+  return <>{children}</>
+}
+
+function RequireAvatar({ children }: { children: ReactNode }) {
+  const { avatarConfig } = usePlayerStore()
+  if (!avatarConfig) return <Navigate to="/camera" replace />
+  return <>{children}</>
+}
+
+function RequireRole({ allowed, children }: { allowed: string[]; children: ReactNode }) {
+  const role = usePlayerStore((state) => state.role)
+  if (!allowed.includes(role)) return <Navigate to="/outside" replace />
+  return <>{children}</>
+}
+
+export default function App() {
+  const { userId, setUserId, setDisplayName, setRole } = usePlayerStore()
+  const [authReady, setAuthReady] = useState(false)
+  const [onboarding, setOnboarding] = useState<OnboardingState>({
+    ready: false,
+    completed: false,
+    underageBlocked: false,
+  })
+
+  useEffect(() => {
+    const onOnboardingCompleted = (event: Event) => {
+      const displayName = (event as CustomEvent<{ displayName?: string }>).detail?.displayName
+      if (displayName) setDisplayName(displayName)
+      setOnboarding({ ready: true, completed: true, underageBlocked: false })
+    }
+    window.addEventListener('profile-onboarding-completed', onOnboardingCompleted)
+
+    const loadProfile = async (nextUserId: string | null) => {
+      if (!nextUserId) {
+        setOnboarding({ ready: true, completed: false, underageBlocked: false })
+        return
+      }
+
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('display_name, role, age_confirmed, onboarding_completed, underage_blocked_at')
+        .eq('user_id', nextUserId)
+        .maybeSingle()
+
+      if (error) {
+        setOnboarding({ ready: true, completed: false, underageBlocked: false })
+        return
+      }
+
+      const profile = data as any
+      if (profile?.display_name && profile.onboarding_completed) setDisplayName(profile.display_name)
+      if (profile?.role) setRole(profile.role)
+      setOnboarding({
+        ready: true,
+        completed: Boolean(profile?.onboarding_completed && profile?.age_confirmed),
+        underageBlocked: Boolean(profile?.underage_blocked_at),
+      })
+    }
+
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
+      if (session?.user && isEmailAuthorizedUser(session.user)) {
+        setUserId(session.user.id)
+        await loadProfile(session.user.id)
+      } else {
+        if (session?.user) await supabase.auth.signOut()
+        usePlayerStore.getState().reset()
+        await loadProfile(null)
+      }
+      setAuthReady(true)
+    })
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (session?.user && isEmailAuthorizedUser(session.user)) {
+        setUserId(session.user.id)
+        void loadProfile(session.user.id)
+        return
+      }
+
+      if (session?.user) void supabase.auth.signOut()
+      usePlayerStore.getState().reset()
+      void loadProfile(null)
+    })
+
+    return () => {
+      subscription.unsubscribe()
+      window.removeEventListener('profile-onboarding-completed', onOnboardingCompleted)
+    }
+  }, [setUserId, setDisplayName, setRole])
+
+  if (!authReady) return <LoadingScreen />
+
+  return (
+    <BrowserRouter>
+      <Suspense fallback={<LoadingScreen />}>
+        <Routes>
+          <Route path="/login"    element={userId ? <Navigate to={onboarding.completed ? '/outside' : '/age-gate'} replace /> : <LoginPage />} />
+          <Route path="/age-gate" element={<RequireAuth><AgeGatePage /></RequireAuth>} />
+          <Route path="/camera"   element={<RequireAuth><RequireOnboarding state={onboarding}><CameraPage /></RequireOnboarding></RequireAuth>} />
+          <Route path="/avatar"   element={<RequireAuth><RequireOnboarding state={onboarding}><AvatarPage /></RequireOnboarding></RequireAuth>} />
+          <Route path="/outside"  element={<RequireAuth><RequireOnboarding state={onboarding}><RequireAvatar><OutsidePage /></RequireAvatar></RequireOnboarding></RequireAuth>} />
+          <Route path="/club"     element={<RequireAuth><RequireOnboarding state={onboarding}><RequireAvatar><ClubPage /></RequireAvatar></RequireOnboarding></RequireAuth>} />
+          <Route path="/bouncer" element={<RequireAuth><RequireOnboarding state={onboarding}><RequireRole allowed={['bouncer', 'owner', 'admin']}><BouncerPage /></RequireRole></RequireOnboarding></RequireAuth>} />
+          <Route path="/dj"       element={<RequireAuth><RequireOnboarding state={onboarding}><RequireRole allowed={['dj', 'owner', 'admin']}><DJPage /></RequireRole></RequireOnboarding></RequireAuth>} />
+          <Route path="/admin"    element={<RequireAuth><RequireOnboarding state={onboarding}><RequireRole allowed={['owner', 'admin']}><AdminPage /></RequireRole></RequireOnboarding></RequireAuth>} />
+          <Route path="/"         element={<Navigate to="/outside" replace />} />
+          <Route path="*"         element={<Navigate to="/" replace />} />
+        </Routes>
+        <MusicPlayer />
+      </Suspense>
+    </BrowserRouter>
+  )
+}
