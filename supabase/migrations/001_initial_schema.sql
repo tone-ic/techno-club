@@ -54,8 +54,7 @@ alter table avatars enable row level security;
 create policy "avatars_all_own" on avatars for all using (auth.uid() = user_id);
 -- Чужое: только публичные поля (config_json без face_tex_url) — через API/view
 create policy "avatars_select_others" on avatars for select
-  using (true)
-  with check (false);  -- insert только через service_role
+  using (true);
 
 -- ─── Club Rooms ───────────────────────────────────────────────────────────────
 create table if not exists club_rooms (

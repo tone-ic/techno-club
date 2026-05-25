@@ -5,7 +5,7 @@ values (
   'avatar-models',
   'avatar-models',
   true,
-  20971520,
+  45000000,
   array[
     'model/gltf-binary',
     'application/octet-stream',
