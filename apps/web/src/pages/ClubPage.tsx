@@ -1351,7 +1351,7 @@ export default function ClubPage() {
     }
 
     function setVisualStopTurn(group: THREE.Group, enabled: boolean) {
-      group.userData.visualStopTurnOffsetY = enabled ? Math.PI : 0
+      group.userData.visualStopTurnOffsetY = enabled ? Math.PI * 2 : 0
       applyVisualStopTurn(group)
     }
 

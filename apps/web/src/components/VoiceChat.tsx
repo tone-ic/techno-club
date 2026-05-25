@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { CSSProperties, PointerEvent } from 'react'
 import {
-  AudioPresets,
   LocalAudioTrack,
   RemoteAudioTrack,
   Room,
@@ -34,16 +33,16 @@ type LocalVoiceCapture = {
 }
 
 const VOICE_TRACK_NAME = 'voice'
+const VOICE_CAPTURE_AUDIO_STATE_EVENT = 'voice-capture-audio-state'
 export const PROXIMITY_VOICE_POSITIONS_EVENT = 'proximity-voice-positions'
 export const VOICE_TALKING_EVENT = 'voice-talking'
 export const VOICE_LEVELS_EVENT = 'voice-levels'
 const MIC_CAPTURE_CONSTRAINTS: MediaTrackConstraints & { voiceIsolation?: boolean } = {
-  echoCancellation: true,
-  noiseSuppression: true,
-  autoGainControl: true,
-  voiceIsolation: true,
+  echoCancellation: false,
+  noiseSuppression: false,
+  autoGainControl: false,
+  voiceIsolation: false,
   channelCount: 1,
-  sampleRate: 48000,
 }
 const VAD_OPEN_RMS = 0.035
 const VAD_CLOSE_RMS = 0.022
@@ -200,40 +199,54 @@ function voiceErrorMessage(error: any, fallback: string) {
   return message
 }
 
+function preferPlaybackAudioSession() {
+  const audioSession = (navigator as Navigator & {
+    audioSession?: { type?: string }
+  }).audioSession
+  if (!audioSession || typeof audioSession.type !== 'string') return
+
+  for (const type of ['playback', 'ambient', 'auto']) {
+    try {
+      audioSession.type = type
+      return
+    } catch {}
+  }
+}
+
+function dispatchVoiceCaptureAudioState(active: boolean) {
+  preferPlaybackAudioSession()
+  window.dispatchEvent(new CustomEvent(VOICE_CAPTURE_AUDIO_STATE_EVENT, {
+    detail: { active, updatedAt: Date.now() },
+  }))
+}
+
 async function createLocalVoiceCapture(): Promise<LocalVoiceCapture> {
   assertMicrophoneAvailable()
+  preferPlaybackAudioSession()
 
   const sourceStream = await navigator.mediaDevices.getUserMedia({
     audio: MIC_CAPTURE_CONSTRAINTS,
     video: false,
   })
-  const audioContext = new AudioContext({ sampleRate: 48000 })
+  preferPlaybackAudioSession()
+
+  const mediaTrack = sourceStream.getAudioTracks()[0]
+  if (!mediaTrack) {
+    sourceStream.getTracks().forEach((track) => track.stop())
+    throw new Error('Браузер не вернул аудиотрек микрофона')
+  }
+
+  const audioContext = new AudioContext()
   const source = audioContext.createMediaStreamSource(sourceStream)
   const analyser = audioContext.createAnalyser()
   analyser.fftSize = 512
   analyser.smoothingTimeConstant = 0.45
 
-  const limiter = audioContext.createDynamicsCompressor()
-  limiter.threshold.value = -10
-  limiter.knee.value = 6
-  limiter.ratio.value = 14
-  limiter.attack.value = 0.003
-  limiter.release.value = 0.09
-
-  const destination = audioContext.createMediaStreamDestination()
   source.connect(analyser)
-  source.connect(limiter)
-  limiter.connect(destination)
 
-  const processedTrack = destination.stream.getAudioTracks()[0]
-  if (!processedTrack) {
-    sourceStream.getTracks().forEach((track) => track.stop())
-    await audioContext.close().catch(() => undefined)
-    throw new Error('Браузер не создал обработанный аудиотрек')
-  }
-
-  const track = new LocalAudioTrack(processedTrack, MIC_CAPTURE_CONSTRAINTS, true, audioContext)
+  const track = new LocalAudioTrack(mediaTrack.clone(), MIC_CAPTURE_CONSTRAINTS, true, audioContext)
   await track.mute().catch(() => undefined)
+  dispatchVoiceCaptureAudioState(true)
 
   return {
     sourceStream,
@@ -560,9 +573,8 @@ export default function VoiceChat({
     await room.localParticipant.publishTrack(capture.track, {
       name: VOICE_TRACK_NAME,
       source: Track.Source.Microphone,
-      audioPreset: AudioPresets.speech,
-      dtx: true,
-      red: true,
+      dtx: false,
+      red: false,
       forceStereo: false,
       stopMicTrackOnMute: false,
       stream: 'voice',
@@ -584,6 +596,7 @@ export default function VoiceChat({
     track?.stop()
     capture?.sourceStream.getTracks().forEach((sourceTrack) => sourceTrack.stop())
     await capture?.audioContext.close().catch(() => undefined)
+    dispatchVoiceCaptureAudioState(false)
     dispatchVoiceLevels(0, false, Array.from(remotesRef.current.values()))
   }
 
@@ -592,6 +605,7 @@ export default function VoiceChat({
 
     try {
       assertMicrophoneAvailable()
+      preferPlaybackAudioSession()
       const room = await ensureRoom()
       incomingAudioUnlockRequestedRef.current = true
       await startIncomingAudioElements(room)

@@ -21,6 +21,7 @@ const FALLBACK_TRACKS = [
 export const MUSIC_BPM_EVENT = 'music-bpm'
 export const MUSIC_OUTPUT_EVENT = 'music-output'
 export const MUSIC_SERVER_STATE_EVENT = 'music-server-state'
+const VOICE_CAPTURE_AUDIO_STATE_EVENT = 'voice-capture-audio-state'
 const MUSIC_MANIFEST_URL = '/music/manifest.json'
 const MUSIC_MANIFEST_REFRESH_MS = 5_000
 const MUSIC_FILE_EXTENSIONS = /\.(mp3|ogg|wav|m4a|aac|flac|webm)(\?.*)?$/i
@@ -28,8 +29,8 @@ const BPM_MIN = 60
 const BPM_MAX = 180
 const BPM_NORMALIZE_MIN = 96
 const BPM_BUCKETS = BPM_MAX - BPM_MIN + 1
-const BPM_WINDOW_SEC = 10
-const BPM_UPDATE_INTERVAL_SEC = 10
+const BPM_WINDOW_SEC = 8
+const BPM_UPDATE_INTERVAL_SEC = 2
 const BPM_MIN_ONSET_GAP_SEC = 0.09
 const BPM_PHASE_LOCK_RADIUS_SEC = 0.14
 const BPM_DISPLAY_FALLBACK = 124
@@ -504,8 +505,8 @@ const OUTSIDE_EQ = {
   treblePocketDb: 4.5,
 } as const
 const BPM_ANALYSIS_INTERVAL_MS = 250
-const BPM_BROADCAST_INTERVAL_MS = 10_000
-const LIVE_BPM_MIN_CONFIDENCE = 0.16
+const BPM_BROADCAST_INTERVAL_MS = 1_000
+const LIVE_BPM_MIN_CONFIDENCE = 0.12
 const SERVER_MUSIC_STATE_STALE_MS = 3_500
 
 let _djRoom: Room | null = null
@@ -712,14 +713,6 @@ function currentServerMusicState() {
   if (Date.now() - _serverMusicStateReceivedAt > SERVER_MUSIC_STATE_STALE_MS) return null
   if (_currentTrackIdx >= 0 && _serverMusicState.trackIdx !== _currentTrackIdx) return null
   return _serverMusicState
-}
-
-function hasReliableServerBpm(state: MusicServerState | null) {
-  return Boolean(state && state.bpmSource === 'audio' && (state.bpmConfidence ?? 1) >= 0.12)
-}
-
-function serverTimestampToPerformanceTime(serverTimestampMs: number) {
-  return performance.now() - (serverNow() - serverTimestampMs)
 }
 
 function getTrackPosition(startedAt: number, duration: number) {
@@ -1459,14 +1452,6 @@ function currentMusicBpm() {
     return _lastKnownBpm
   }
 
-  if (!_djActive) {
-    const serverState = currentServerMusicState()
-    if (hasReliableServerBpm(serverState)) {
-      _lastKnownBpm = Math.round(clamp(serverState!.bpm, BPM_MIN, BPM_MAX) * 10) / 10
-      return _lastKnownBpm
-    }
-  }
-
   const sourcePlaying = _djActive
     ? Boolean(_djTrack || _djMediaStreamTrack || (_djElement && !_djElement.paused))
     : Boolean(_audio && !_audio.paused)
@@ -1479,8 +1464,7 @@ function dispatchMusicBpm() {
   const ctx = _ctx
   const bpm = currentMusicBpm()
   const serverState = currentServerMusicState()
-  const useServerBeat = hasReliableServerBpm(serverState) && !_djActive
-  const liveBeatAtMs = !useServerBeat && estimator?.lastBeatAtSec !== null && estimator?.lastBeatAtSec !== undefined && ctx
+  const liveBeatAtMs = estimator?.lastBeatAtSec !== null && estimator?.lastBeatAtSec !== undefined && ctx
     ? performance.now() - Math.max(0, ctx.currentTime - estimator.lastBeatAtSec) * 1000
     : null
 
@@ -1489,13 +1473,9 @@ function dispatchMusicBpm() {
       bpm,
       trackIdx: serverState && !_djActive ? serverState.trackIdx : _currentTrackIdx,
       source: _djActive ? 'dj' : 'track',
-      confidence: useServerBeat ? serverState?.bpmConfidence ?? 1 : estimator?.confidence ?? 0,
-      beatAtMs: useServerBeat && serverState
-        ? serverTimestampToPerformanceTime(serverState.beatStartedAt)
-        : liveBeatAtMs,
-      beatIntervalSec: useServerBeat && serverState
-        ? serverState.beatIntervalMs / 1000
-        : estimator?.beatIntervalSec ?? (bpm ? 60 / bpm : null),
+      confidence: estimator?.confidence ?? 0,
+      beatAtMs: liveBeatAtMs,
+      beatIntervalSec: estimator?.beatIntervalSec ?? (bpm ? 60 / bpm : null),
       updatedAt: Date.now(),
     },
   }))
@@ -1876,6 +1856,7 @@ export function applyMusicState(
     // Новый трек — загружаем и встаём на нужную позицию
     _currentTrackIdx = nextTrackIdx
     _trackBpmEstimator?.reset()
+    _lastKnownBpm = null
     audio.src = _tracks[nextTrackIdx]
     audio.load()
     updateMediaSession(audio.paused ? 'paused' : 'playing')
@@ -2060,6 +2041,15 @@ export default function MusicPlayer() {
         restoreTimers.push(timer)
       })
     }
+    const onVoiceCaptureAudioState = (event: Event) => {
+      const active = Boolean((event as CustomEvent).detail?.active)
+      if (active) {
+        void ensureAudioContextRunning(_ctx)
+        applyOutputState()
+        return
+      }
+      scheduleMainAudioRestore()
+    }
     const useLockscreenAudio = () => {
       if (!IS_MOBILE_AUDIO) return
       if (!hasLockscreenMusicAccess()) {
@@ -2093,6 +2083,7 @@ export default function MusicPlayer() {
     window.addEventListener('pageshow', scheduleMainAudioRestore)
     window.addEventListener('focus', scheduleMainAudioRestore)
     document.addEventListener('resume', scheduleMainAudioRestore)
+    window.addEventListener(VOICE_CAPTURE_AUDIO_STATE_EVENT, onVoiceCaptureAudioState)
 
     const unlock = () => {
       if (!_audioRouteActive) return
@@ -2136,6 +2127,7 @@ export default function MusicPlayer() {
       window.removeEventListener('pageshow', scheduleMainAudioRestore)
       window.removeEventListener('focus', scheduleMainAudioRestore)
       document.removeEventListener('resume', scheduleMainAudioRestore)
+      window.removeEventListener(VOICE_CAPTURE_AUDIO_STATE_EVENT, onVoiceCaptureAudioState)
       window.removeEventListener('pointerdown', unlock, true)
       window.removeEventListener('pointerup', unlock, true)
       window.removeEventListener('touchstart', unlock, true)
