@@ -173,6 +173,7 @@ function applyRemoteVolume(remote: VoiceRemote, volume: number) {
   const nextVolume = clamp(volume, 0, 1)
   const shouldMute = nextVolume <= VOICE_VOLUME_EPSILON
   const webAudioGain = remote.gain
+  const webAudioReady = Boolean(webAudioGain && webAudioGain.context.state === 'running')
 
   if (shouldMute) {
     if (webAudioGain) {
@@ -189,7 +190,7 @@ function applyRemoteVolume(remote: VoiceRemote, volume: number) {
     return
   }
 
-  if (webAudioGain) {
+  if (webAudioGain && webAudioReady) {
     const now = webAudioGain.context.currentTime
     webAudioGain.gain.cancelScheduledValues(now)
     webAudioGain.gain.setTargetAtTime(nextVolume, now, 0.06)
@@ -444,7 +445,7 @@ export default function VoiceChat({
       }
 
       const elementOutOfSync = remote.gain
-        ? false
+        ? remote.gain.context.state === 'running' && Boolean(remote.element && !remote.element.muted)
         : !remote.element ||
           Math.abs(remote.element.volume - volume) > VOICE_VOLUME_EPSILON ||
           remote.element.muted !== (volume <= VOICE_VOLUME_EPSILON) ||
@@ -872,7 +873,7 @@ export default function VoiceChat({
   }, [myPlayerId])
 
   useEffect(() => {
-    const unlock = () => requestIncomingAudioUnlock()
+    const unlock = () => requestIncomingAudioUnlock(true)
     window.addEventListener('pointerdown', unlock, true)
     window.addEventListener('mousedown', unlock, true)
     window.addEventListener('touchstart', unlock, { capture: true, passive: true })

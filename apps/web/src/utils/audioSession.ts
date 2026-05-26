@@ -7,6 +7,7 @@ type AudioSessionNavigator = Navigator & {
 export type AudioSessionRelease = () => void
 
 let activeCaptureSessionCount = 0
+let playbackRestoreTimer: number | null = null
 
 function setAudioSessionType(candidates: string[]) {
   if (typeof navigator === 'undefined') return
@@ -22,6 +23,10 @@ function setAudioSessionType(candidates: string[]) {
 }
 
 export function preferCaptureAudioSession() {
+  if (playbackRestoreTimer !== null && typeof window !== 'undefined') {
+    window.clearTimeout(playbackRestoreTimer)
+    playbackRestoreTimer = null
+  }
   setAudioSessionType(['play-and-record', 'auto'])
 }
 
@@ -31,6 +36,12 @@ export function preferPlaybackAudioSession() {
     return
   }
   setAudioSessionType(['playback', 'ambient', 'auto'])
+  if (typeof window === 'undefined') return
+  if (playbackRestoreTimer !== null) window.clearTimeout(playbackRestoreTimer)
+  playbackRestoreTimer = window.setTimeout(() => {
+    playbackRestoreTimer = null
+    if (activeCaptureSessionCount === 0) setAudioSessionType(['playback', 'ambient', 'auto'])
+  }, 350)
 }
 
 export function claimCaptureAudioSession(): AudioSessionRelease {

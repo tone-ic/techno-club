@@ -1151,7 +1151,12 @@ async function primeTrackLockscreenAudio() {
   } catch {
     // The main audio element still works; this fallback will retry when the page hides.
   } finally {
-    lockscreenAudio.volume = previousVolume
+    if (_lockscreenActive && _lockscreenSource === 'track') {
+      lockscreenAudio.volume = previousVolume
+    } else {
+      lockscreenAudio.volume = 0
+      lockscreenAudio.muted = true
+    }
   }
 }
 
@@ -1167,7 +1172,12 @@ async function primeDjLockscreenAudio() {
   } catch {
     // Mobile browsers may only allow this once a remote DJ track is already audible.
   } finally {
-    element.volume = previousVolume
+    if (_lockscreenActive && _lockscreenSource === 'dj') {
+      element.volume = previousVolume
+    } else {
+      element.volume = 0
+      element.muted = true
+    }
   }
 }
 

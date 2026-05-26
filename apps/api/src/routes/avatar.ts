@@ -1025,12 +1025,47 @@ function blenderExecutable(): string {
 
   const configured = process.env.BLENDER_PATH?.trim()
   if (configured) {
-    cachedBlenderExecutable = configured
-    return configured
+    const resolvedConfigured = resolveConfiguredBlenderExecutable(configured)
+    if (resolvedConfigured) {
+      cachedBlenderExecutable = resolvedConfigured
+      return resolvedConfigured
+    }
   }
 
   cachedBlenderExecutable = findWindowsBlenderExecutable()
-  return cachedBlenderExecutable || 'blender'
+  return cachedBlenderExecutable || configured || 'blender'
+}
+
+function resolveConfiguredBlenderExecutable(configured: string): string | null {
+  const hasPathSeparator = configured.includes('/') || configured.includes('\\')
+  if (hasPathSeparator || path.isAbsolute(configured)) return configured
+
+  const commandPath = findCommandOnPath(configured)
+  if (commandPath) return commandPath
+
+  if (process.platform === 'win32' && configured.toLowerCase() === 'blender') {
+    return findWindowsBlenderExecutable()
+  }
+
+  return configured
+}
+
+function findCommandOnPath(command: string): string | null {
+  const pathEnv = process.env.PATH || ''
+  if (!pathEnv) return null
+  const extensions = process.platform === 'win32'
+    ? (process.env.PATHEXT || '.EXE;.CMD;.BAT;.COM').split(';')
+    : ['']
+
+  for (const directory of pathEnv.split(path.delimiter)) {
+    if (!directory) continue
+    for (const extension of extensions) {
+      const candidate = path.join(directory, process.platform === 'win32' && path.extname(command) ? command : `${command}${extension}`)
+      if (existsSync(candidate)) return candidate
+    }
+  }
+
+  return null
 }
 
 function findWindowsBlenderExecutable(): string | null {
@@ -1040,6 +1075,7 @@ function findWindowsBlenderExecutable(): string | null {
     process.env.BLENDER_INSTALL_DIR,
     process.env.ProgramFiles ? path.join(process.env.ProgramFiles, 'Blender Foundation') : null,
     process.env['ProgramFiles(x86)'] ? path.join(process.env['ProgramFiles(x86)']!, 'Blender Foundation') : null,
+    process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'Programs', 'Blender Foundation') : null,
   ].filter(Boolean) as string[]
 
   for (const root of roots) {
