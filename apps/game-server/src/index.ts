@@ -124,10 +124,12 @@ interface MusicBpmAnalysisCacheEntry {
   error?: string
 }
 
+type MusicSource = 'track' | 'dj'
+
 const players = new Map<string, Player>()
 const queue: string[] = []
 let nextId = 1
-const SERVER_PROTOCOL_VERSION = 'doorclub-ws/2026-05-17.server-audio-bpm-v3'
+const SERVER_PROTOCOL_VERSION = 'doorclub-ws/2026-05-26.server-music-source-v1'
 const PORT = Number(process.env.GAME_SERVER_PORT || process.env.PORT || 2567)
 const COOLDOWN_MS = 10 * 60 * 1000
 const PLAYER_MIN_DISTANCE = 0.9
@@ -194,6 +196,10 @@ let musicTrackInfos = initialMusicTrackState.tracks
 let nextMusicScanAt = 0
 let musicTrackIdx = 0
 let musicStartedAt = Date.now()
+let musicSource: MusicSource = 'track'
+let djStreamStartedAt = 0
+let djStreamPlayerId: string | null = null
+let djStreamName = ''
 const musicDurationsSec = new Map<number, number>()
 
 setInterval(() => {
@@ -488,16 +494,95 @@ function musicBpmDetailsForTrack(trackIdx = musicTrackIdx) {
   }
 }
 
-function currentMusicState(now = Date.now()) {
-  const trackIdx = ((musicTrackIdx % musicTrackCount) + musicTrackCount) % musicTrackCount
-  const { bpm, bpmConfidence, bpmSource } = musicBpmDetailsForTrack(trackIdx)
+function beatStateForTimeline(startedAt: number, bpm: number, now: number) {
   const beatIntervalMs = 60_000 / bpm
-  const elapsedBeats = Math.max(0, (now - musicStartedAt) / beatIntervalMs)
+  const elapsedBeats = Math.max(0, (now - startedAt) / beatIntervalMs)
   const beatIndex = Math.floor(elapsedBeats)
   const beatPhase = elapsedBeats - beatIndex
-  const beatStartedAt = musicStartedAt + beatIndex * beatIntervalMs
+  const beatStartedAt = startedAt + beatIndex * beatIntervalMs
   const phraseBeat = ((beatIndex % 32) + 32) % 32
   const measureBeat = ((beatIndex % 4) + 4) % 4
+
+  return {
+    beatIntervalMs,
+    elapsedBeats,
+    beatIndex,
+    beatPhase,
+    beatStartedAt,
+    phraseBeat,
+    measureBeat,
+  }
+}
+
+function currentMusicState(now = Date.now()) {
+  const trackIdx = ((musicTrackIdx % musicTrackCount) + musicTrackCount) % musicTrackCount
+
+  if (musicSource === 'dj' && djStreamStartedAt > 0) {
+    const bpm = MUSIC_FALLBACK_BPM
+    const {
+      beatIntervalMs,
+      elapsedBeats,
+      beatIndex,
+      beatPhase,
+      beatStartedAt,
+      phraseBeat,
+      measureBeat,
+    } = beatStateForTimeline(djStreamStartedAt, bpm, now)
+    const phraseLift = smooth01(phraseBeat / 31)
+    const fourBarLift = smooth01((((beatIndex % 16) + 16) % 16) / 15)
+    const kickPulse = Math.max(
+      beatPulse(beatPhase, 0, 0.075),
+      measureBeat === 2 ? beatPulse(beatPhase, 0, 0.07) * 0.54 : 0,
+    )
+    const rhythmPulse = Math.max(
+      kickPulse * 0.72,
+      beatPulse(beatPhase, 0.5, 0.065) * 0.58,
+      beatPulse(beatPhase, 0.25, 0.045) * 0.22,
+      beatPulse(beatPhase, 0.75, 0.045) * 0.2,
+    )
+    const kickIntensity = clamp(kickPulse * (0.9 + fourBarLift * 0.16), 0, 1)
+    const rhythmIntensity = clamp(rhythmPulse + phraseLift * 0.1, 0, 1)
+    const onsetStrength = clamp(Math.max(kickIntensity, rhythmIntensity * 0.72), 0, 1)
+    const intensity = clamp(
+      0.42 + clubEnergy * 0.24 + rhythmIntensity * 0.24 + kickIntensity * 0.18 + phraseLift * 0.06,
+      0.1,
+      1,
+    )
+
+    return {
+      source: 'dj',
+      trackIdx,
+      trackCount: musicTrackCount,
+      trackName: djStreamName || 'DJ LIVE',
+      djPlayerId: djStreamPlayerId,
+      djName: djStreamName,
+      startedAt: djStreamStartedAt,
+      serverNow: now,
+      bpm,
+      bpmSource: 'fallback',
+      bpmConfidence: 0,
+      beatStartedAt,
+      beatIntervalMs,
+      beatCount: Math.round(elapsedBeats * 1000) / 1000,
+      phraseBeat,
+      intensity,
+      rhythmIntensity,
+      kickIntensity,
+      onsetStrength,
+      clubEnergy,
+    }
+  }
+
+  const { bpm, bpmConfidence, bpmSource } = musicBpmDetailsForTrack(trackIdx)
+  const {
+    beatIntervalMs,
+    elapsedBeats,
+    beatIndex,
+    beatPhase,
+    beatStartedAt,
+    phraseBeat,
+    measureBeat,
+  } = beatStateForTimeline(musicStartedAt, bpm, now)
   const phraseLift = smooth01(phraseBeat / 31)
   const fourBarLift = smooth01((((beatIndex % 16) + 16) % 16) / 15)
   const variation = 0.86 + seededNoise(trackIdx * 1009 + Math.floor(beatIndex / 4)) * 0.28
@@ -592,6 +677,30 @@ function broadcastDjSchedule() {
   broadcast(data)
 }
 
+function setDjMusicSource(player: Player) {
+  if (player.role !== 'dj') return
+  const now = Date.now()
+  const djName = player.djName || player.displayName || 'DJ'
+  const changed = musicSource !== 'dj' || djStreamPlayerId !== player.id
+  musicSource = 'dj'
+  djStreamPlayerId = player.id
+  djStreamName = djName
+  if (changed || djStreamStartedAt <= 0) djStreamStartedAt = now
+  ensureDjScheduleItem(player, true)
+  broadcastDjSchedule()
+  broadcastMusicSync()
+}
+
+function clearDjMusicSource(playerId?: string | null) {
+  if (musicSource !== 'dj') return
+  if (playerId && djStreamPlayerId && djStreamPlayerId !== playerId) return
+  musicSource = 'track'
+  djStreamStartedAt = 0
+  djStreamPlayerId = null
+  djStreamName = ''
+  broadcastMusicSync()
+}
+
 function ensureDjScheduleItem(player: Player, claimed = false) {
   if (!player.userId) return null
   const key = player.economyKey
@@ -624,6 +733,7 @@ function ensureDjScheduleItem(player: Player, claimed = false) {
 }
 
 function markDjOffline(player: Player) {
+  clearDjMusicSource(player.id)
   if (!player.userId) return
   const item = djSchedule.get(player.economyKey)
   if (!item || item.playerId !== player.id) return
@@ -1041,6 +1151,7 @@ function sendGameplayState(player: Player) {
     clublesBalance: player.clublesBalance,
     lockscreenMusicUntil: player.lockscreenMusicUntil,
     activeEntitlements: activeEntitlementsFor(player),
+    musicSource,
     musicTrackIdx,
     musicTrackCount,
     musicState: currentMusicState(),
@@ -1085,9 +1196,10 @@ function broadcastMusicSync() {
   broadcast({
     type: 'musicSync',
     protocolVersion: SERVER_PROTOCOL_VERSION,
+    source: musicState.source,
     trackIdx: musicTrackIdx,
     trackCount: musicTrackCount,
-    startedAt: musicStartedAt,
+    startedAt: musicState.startedAt,
     serverNow: musicState.serverNow,
     musicState,
   })
@@ -1098,15 +1210,10 @@ function broadcastMusicState() {
   broadcast({
     type: 'musicState',
     protocolVersion: SERVER_PROTOCOL_VERSION,
+    source: musicState.source,
     serverNow: musicState.serverNow,
     musicState,
   })
-}
-
-function nextMusicTrack() {
-  musicTrackIdx = (musicTrackIdx + 1) % musicTrackCount
-  musicStartedAt = Date.now()
-  broadcastMusicSync()
 }
 
 function maybeAdvanceMusicTrack() {
@@ -1326,6 +1433,7 @@ wss.on('connection', (ws) => {
           modelUrl: p.modelUrl,
           x: p.x, z: p.z, floorLevel: p.floorLevel, rotY: p.rotY, moving: p.moving, musicDanceIntensity: p.musicDanceIntensity,
         }))
+      const welcomeMusicState = currentMusicState()
 
       ws.send(JSON.stringify({
         type: 'welcome',
@@ -1339,11 +1447,12 @@ wss.on('connection', (ws) => {
         players: others,
         queue: queueSnapshot(),
         cooldownUntil: player.cooldownUntil,
+        musicSource,
         musicTrackIdx,
         musicTrackCount,
-        musicStartedAt,
-        musicServerNow: Date.now(),
-        musicState: currentMusicState(),
+        musicStartedAt: welcomeMusicState.startedAt,
+        musicServerNow: welcomeMusicState.serverNow,
+        musicState: welcomeMusicState,
       }))
 
       broadcast({
@@ -1389,6 +1498,10 @@ wss.on('connection', (ws) => {
       p.displayName = nextName
       if (p.role === 'dj') {
         ensureDjScheduleItem(p, true)
+        if (musicSource === 'dj' && djStreamPlayerId === playerId) {
+          djStreamName = p.djName || p.displayName || 'DJ'
+          broadcastMusicSync()
+        }
         broadcastDjSchedule()
       }
       broadcast({ type: 'displayNameChanged', id: playerId, displayName: p.displayName }, undefined, p.room)
@@ -1400,6 +1513,10 @@ wss.on('connection', (ws) => {
       if (!nextName) return
       p.djName = nextName
       ensureDjScheduleItem(p, true)
+      if (musicSource === 'dj' && djStreamPlayerId === playerId) {
+        djStreamName = p.djName
+        broadcastMusicSync()
+      }
       broadcast({ type: 'djNameChanged', id: playerId, djName: p.djName }, undefined, p.room)
       broadcastDjSchedule()
 
@@ -1408,6 +1525,11 @@ wss.on('connection', (ws) => {
       ensureDjScheduleItem(p, true)
       sendGameplayState(p)
       broadcastDjSchedule()
+
+    } else if (msg.type === 'djStreamState' && playerId) {
+      const p = players.get(playerId); if (!p || p.role !== 'dj') return
+      if (msg.active) setDjMusicSource(p)
+      else clearDjMusicSource(playerId)
 
     } else if (msg.type === 'move' && playerId) {
       const p = players.get(playerId); if (!p) return
@@ -1963,11 +2085,6 @@ wss.on('connection', (ws) => {
         maybeAdvanceMusicTrack()
         broadcastMusicSync()
       }
-
-    } else if (msg.type === 'musicEnded' && playerId) {
-      if (msg.trackIdx !== musicTrackIdx) return
-      if (Date.now() - musicStartedAt < 10_000) return
-      nextMusicTrack()
     } else if (msg.type === 'timePing') {
       ws.send(JSON.stringify({ type:'timePong', clientSentAt: msg.clientSentAt, serverNow: Date.now() }))
     }

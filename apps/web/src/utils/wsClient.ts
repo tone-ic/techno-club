@@ -23,6 +23,7 @@ export interface GameServerStatus {
   currentRoom?: 'outside' | 'club'
   protocolVersion?: string
   role?: string
+  musicSource?: MusicServerState['source']
   musicTrackIdx?: number
   musicTrackCount?: number
   clublesBalance?: number
@@ -30,10 +31,12 @@ export interface GameServerStatus {
 }
 
 export interface MusicServerState {
-  source: 'track'
+  source: 'track' | 'dj'
   trackIdx: number
   trackCount: number
   trackName?: string
+  djPlayerId?: string | null
+  djName?: string
   startedAt: number
   serverNow: number
   bpm: number
@@ -178,6 +181,7 @@ export interface GameplayState {
   clublesBalance?: number
   lockscreenMusicUntil?: number
   activeEntitlements?: string[]
+  musicSource?: MusicServerState['source']
   musicTrackIdx?: number
   musicTrackCount?: number
   musicState?: MusicServerState
@@ -227,6 +231,7 @@ function isMusicServerState(value: unknown): value is MusicServerState {
   const state = value as Partial<MusicServerState> | null
   return Boolean(
     state &&
+    (state.source === undefined || state.source === 'track' || state.source === 'dj') &&
     typeof state.trackIdx === 'number' &&
     typeof state.trackCount === 'number' &&
     typeof state.startedAt === 'number' &&
@@ -241,9 +246,10 @@ function isMusicServerState(value: unknown): value is MusicServerState {
 }
 
 function dispatchMusicServerState(value: unknown, serverNow?: number, clientReceivedAt = Date.now()) {
-  if (!isMusicServerState(value)) return
+  if (!isMusicServerState(value)) return null
   const musicState: MusicServerState = {
     ...value,
+    source: value.source === 'dj' ? 'dj' : 'track',
     serverNow: typeof value.serverNow === 'number' && Number.isFinite(value.serverNow)
       ? value.serverNow
       : typeof serverNow === 'number' && Number.isFinite(serverNow)
@@ -253,13 +259,37 @@ function dispatchMusicServerState(value: unknown, serverNow?: number, clientRece
   window.dispatchEvent(new CustomEvent('music-server-state', {
     detail: { musicState, serverNow: musicState.serverNow, clientReceivedAt }
   }))
+  return musicState
 }
 
 function dispatchMusicSync(trackIdx: number, startedAt: number, serverNow?: number, clientReceivedAt = Date.now(), musicState?: unknown) {
+  const syncedState = isMusicServerState(musicState)
+    ? {
+        ...musicState,
+        source: musicState.source === 'dj' ? 'dj' as const : 'track' as const,
+        serverNow: typeof musicState.serverNow === 'number' && Number.isFinite(musicState.serverNow)
+          ? musicState.serverNow
+          : typeof serverNow === 'number' && Number.isFinite(serverNow)
+            ? serverNow
+            : Date.now(),
+      }
+    : null
+
+  if (syncedState?.source === 'dj') {
+    dispatchMusicServerState(syncedState, serverNow, clientReceivedAt)
+    return
+  }
+
   window.dispatchEvent(new CustomEvent('music-sync', {
-    detail: { trackIdx, startedAt, serverNow, clientReceivedAt, musicState }
+    detail: {
+      trackIdx: syncedState?.trackIdx ?? trackIdx,
+      startedAt: syncedState?.startedAt ?? startedAt,
+      serverNow: syncedState?.serverNow ?? serverNow,
+      clientReceivedAt,
+      musicState,
+    }
   }))
-  dispatchMusicServerState(musicState, serverNow, clientReceivedAt)
+  if (syncedState) dispatchMusicServerState(syncedState, serverNow, clientReceivedAt)
 }
 
 function dispatchDjSchedule(schedule: DjScheduleItem[], serverNow = Date.now()) {
@@ -274,10 +304,6 @@ class GameClient {
   private _myId: string | null = null
 
   constructor() {
-    window.addEventListener('music-track-ended', (e: Event) => {
-      const { trackIdx } = (e as CustomEvent).detail ?? {}
-      if (typeof trackIdx === 'number') this._send({ type: 'musicEnded', trackIdx })
-    })
     window.addEventListener('music-track-duration', (e: Event) => {
       const { trackIdx, duration } = (e as CustomEvent).detail ?? {}
       if (typeof trackIdx === 'number' && typeof duration === 'number') {
@@ -323,6 +349,7 @@ class GameClient {
               currentRoom: msg.room ?? requestedRoom,
               protocolVersion: msg.protocolVersion,
               role: msg.role,
+              musicSource: msg.musicState?.source ?? msg.musicSource,
               musicTrackIdx: msg.musicTrackIdx,
               musicTrackCount: msg.musicTrackCount,
             })
@@ -353,6 +380,7 @@ class GameClient {
           case 'musicSync':
             dispatchServerStatus({
               protocolVersion: msg.protocolVersion,
+              musicSource: msg.musicState?.source ?? msg.source,
               musicTrackIdx: msg.trackIdx,
               musicTrackCount: msg.trackCount,
             })
@@ -398,6 +426,7 @@ class GameClient {
               protocolVersion: msg.protocolVersion,
               clublesBalance: msg.clublesBalance,
               activeEntitlements: Array.isArray(msg.activeEntitlements) ? msg.activeEntitlements : undefined,
+              musicSource: msg.musicState?.source ?? msg.musicSource,
               musicTrackIdx: msg.musicTrackIdx,
               musicTrackCount: msg.musicTrackCount,
             })
@@ -437,6 +466,7 @@ class GameClient {
   setDisplayName(displayName: string)     { this._send({ type: 'setDisplayName', displayName }) }
   setDjName(djName: string)               { this._send({ type: 'setDjName', djName }) }
   claimDjScheduleSlot()                   { this._send({ type: 'djScheduleClaim' }) }
+  setDjStreamLive(active: boolean)         { this._send({ type: 'djStreamState', active }) }
   staffEntry(inviteRole: string, password: string) {
     this._send({ type: 'staffEntry', inviteRole, password })
   }

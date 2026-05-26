@@ -483,7 +483,6 @@ let _volume = 0.4
 let _environment: 'club' | 'outside' = 'club'
 let _outsideDoorProximity = 0
 let _musicTimeline: { trackIdx: number; startedAt: number } | null = null
-let _usingLocalFallbackTimeline = false
 let _serverMusicState: MusicServerState | null = null
 let _serverMusicStateReceivedAt = 0
 let _bestTimeSyncRttMs = Number.POSITIVE_INFINITY
@@ -851,6 +850,7 @@ function isServerMusicState(value: unknown): value is MusicServerState {
   const state = value as Partial<MusicServerState> | null
   return Boolean(
     state &&
+    (state.source === undefined || state.source === 'track' || state.source === 'dj') &&
     typeof state.trackIdx === 'number' &&
     typeof state.trackCount === 'number' &&
     typeof state.startedAt === 'number' &&
@@ -869,6 +869,7 @@ function applyServerMusicState(value: unknown, syncServerNow?: number, syncClien
   if (!isServerMusicState(value)) return
   const bpm = clamp(value.bpm, BPM_MIN, BPM_MAX)
   if (!Number.isFinite(bpm) || value.beatIntervalMs <= 0) return
+  const wasServerDjSource = shouldUseServerDjSource()
 
   rememberBroadcastServerTime(
     typeof syncServerNow === 'number' && Number.isFinite(syncServerNow) ? syncServerNow : value.serverNow,
@@ -876,6 +877,7 @@ function applyServerMusicState(value: unknown, syncServerNow?: number, syncClien
   )
   _serverMusicState = {
     ...value,
+    source: value.source === 'dj' ? 'dj' : 'track',
     bpm,
     intensity: clamp(value.intensity, 0, 1),
     rhythmIntensity: clamp(value.rhythmIntensity, 0, 1),
@@ -883,15 +885,31 @@ function applyServerMusicState(value: unknown, syncServerNow?: number, syncClien
     onsetStrength: clamp(value.onsetStrength, 0, 1),
   }
   _serverMusicStateReceivedAt = Date.now()
+  if (_serverMusicState.source === 'dj') {
+    suspendLocalTrackForDj()
+    void startDjAudioElement()
+  } else if (wasServerDjSource) {
+    void resumeLocalTrackAfterDj()
+  }
   dispatchMusicBpm()
   dispatchMusicOutput()
 }
 
-function currentServerMusicState() {
-  if (shouldUseDjOutput() || !_serverMusicState) return null
+function currentAuthoritativeMusicState() {
+  if (!_serverMusicState) return null
   if (Date.now() - _serverMusicStateReceivedAt > SERVER_MUSIC_STATE_STALE_MS) return null
-  if (_currentTrackIdx >= 0 && _serverMusicState.trackIdx !== _currentTrackIdx) return null
   return _serverMusicState
+}
+
+function shouldUseServerDjSource() {
+  return currentAuthoritativeMusicState()?.source === 'dj'
+}
+
+function currentServerMusicState() {
+  const state = currentAuthoritativeMusicState()
+  if (!state || state.source !== 'track') return null
+  if (_currentTrackIdx >= 0 && state.trackIdx !== _currentTrackIdx) return null
+  return state
 }
 
 function getTrackPosition(startedAt: number, duration: number) {
@@ -954,7 +972,7 @@ function playTimelineAudio(alignAfterStart = false) {
     suspendHiddenAudioWithoutAccess()
     return
   }
-  if (shouldUseDjOutput()) {
+  if (shouldUseServerDjSource()) {
     suspendLocalTrackForDj()
     return
   }
@@ -999,18 +1017,9 @@ function trackSignature(tracks: string[]) {
   return tracks.join('\n')
 }
 
-function startLocalFallbackTimeline(trackIdx = _currentTrackIdx >= 0 ? _currentTrackIdx : 0) {
-  if (_tracks.length === 0) return false
-  const nextTrackIdx = ((trackIdx % _tracks.length) + _tracks.length) % _tracks.length
-  applyMusicState(nextTrackIdx, Date.now())
-  _usingLocalFallbackTimeline = true
-  return true
-}
-
 async function ensurePlayableMusicTimeline() {
   await refreshMusicTracks()
-  if (_musicTimeline || _audio?.src) return true
-  return startLocalFallbackTimeline(0)
+  return Boolean(_musicTimeline || _audio?.src || shouldUseServerDjSource())
 }
 
 async function refreshMusicTracks() {
@@ -1030,9 +1039,7 @@ async function refreshMusicTracks() {
     _tracksSignature = nextSignature
     if (_currentTrackIdx >= _tracks.length) _currentTrackIdx = -1
     if (_musicTimeline) {
-      const wasLocalFallback = _usingLocalFallbackTimeline
       applyMusicState(_musicTimeline.trackIdx, _musicTimeline.startedAt)
-      _usingLocalFallbackTimeline = wasLocalFallback
     }
     return true
   } catch {
@@ -1071,7 +1078,7 @@ function waitForCanPlay(audio: HTMLAudioElement, timeoutMs = 1600) {
 }
 
 function getLockscreenTrackVolume() {
-  return clamp(_volume * getEnvironmentGain() * (shouldUseDjOutput() ? 0 : 1), 0, 1)
+  return clamp(_volume * getEnvironmentGain() * (shouldUseServerDjSource() ? 0 : 1), 0, 1)
 }
 
 function getLockscreenDjVolume() {
@@ -1180,7 +1187,7 @@ function updateMediaSession(playbackState: MediaSessionPlaybackState = 'playing'
   if (!('mediaSession' in navigator)) return
 
   navigator.mediaSession.metadata = new MediaMetadata({
-    title: shouldUseDjOutput() ? 'DJ LIVE' : getTrackTitle(),
+    title: shouldUseServerDjSource() ? 'DJ LIVE' : getTrackTitle(),
     artist: 'DOOR//CLUB',
     album: _environment === 'outside' ? 'Outside the club' : 'Club floor',
   })
@@ -1479,7 +1486,7 @@ function stopLockscreenAudio(syncMain = true) {
     disconnectMainSpeaker()
     disconnectDjSpeaker()
   } else {
-    if (!shouldUseDjOutput()) connectMainSpeaker()
+    if (!shouldUseServerDjSource()) connectMainSpeaker()
     if (shouldUseDjOutput()) connectDjSpeaker()
   }
 }
@@ -1567,7 +1574,7 @@ async function restoreTrackAudioFromLockscreen() {
 }
 
 function needsMainTrackAudioRouteRestore() {
-  if (!_audioRouteActive || isDocumentHidden() || shouldUseDjOutput()) return false
+  if (!_audioRouteActive || isDocumentHidden() || shouldUseServerDjSource()) return false
   if (_hiddenSuspendedWithoutLockscreenAccess) return true
   if (!_audio?.src && _musicTimeline) return true
   if (!_audio?.src) return false
@@ -1596,15 +1603,16 @@ async function ensureMainTrackAudioRouteInner() {
   if (isDocumentHidden()) return false
 
   const { audio, ctx } = getAudioGraph()
+  if (shouldUseServerDjSource()) {
+    suspendLocalTrackForDj()
+    await startDjAudioElement()
+    return shouldUseDjOutput()
+  }
   if (!audio.src && _musicTimeline) {
     _currentTrackIdx = -1
     applyMusicState(_musicTimeline.trackIdx, _musicTimeline.startedAt)
   }
   if (!audio.src) return false
-  if (shouldUseDjOutput()) {
-    suspendLocalTrackForDj()
-    return true
-  }
 
   if (!(_lockscreenActive && _lockscreenSource === 'track' && shouldKeepNativeLockscreenAudio())) {
     connectMainSpeaker()
@@ -1657,13 +1665,8 @@ function getAudioGraph() {
 
     // Трек переключает сервер, чтобы у всех был один общий таймлайн.
     _audio.addEventListener('ended', () => {
-      if (_usingLocalFallbackTimeline && _tracks.length > 0) {
-        startLocalFallbackTimeline(_currentTrackIdx + 1)
-        return
-      }
-      window.dispatchEvent(new CustomEvent('music-track-ended', {
-        detail: { trackIdx: _currentTrackIdx }
-      }))
+      _audio?.pause()
+      dispatchMusicOutput()
     })
     _audio.addEventListener('loadedmetadata', () => {
       if (!Number.isFinite(_audio!.duration) || _audio!.duration <= 0) return
@@ -1705,11 +1708,12 @@ function getAudioGraph() {
 
 function dispatchDjState(active: boolean) {
   const wasActive = _djActive
+  const wasDjOutput = shouldUseDjOutput()
   _djActive = active
   if (active !== wasActive) _lastKnownBpm = null
-  if (shouldUseDjOutput()) {
+  if (shouldUseServerDjSource()) {
     suspendLocalTrackForDj()
-  } else if (active || wasActive) {
+  } else if (wasDjOutput || active || wasActive) {
     void resumeLocalTrackAfterDj()
   }
   if (_ctx && _gain) applyOutputState()
@@ -1721,6 +1725,12 @@ function dispatchDjState(active: boolean) {
 }
 
 function currentMusicBpm(serverState = currentServerMusicState()) {
+  const authoritativeState = currentAuthoritativeMusicState()
+  if (authoritativeState?.source === 'dj') {
+    _lastKnownBpm = Math.round(clamp(authoritativeState.bpm, BPM_MIN, BPM_MAX) * 10) / 10
+    return _lastKnownBpm
+  }
+
   const useDjOutput = shouldUseDjOutput()
   if (!useDjOutput && serverState) {
     _lastKnownBpm = Math.round(clamp(serverState.bpm, BPM_MIN, BPM_MAX) * 10) / 10
@@ -1741,6 +1751,8 @@ function currentMusicBpm(serverState = currentServerMusicState()) {
 }
 
 function dispatchMusicBpm() {
+  const authoritativeState = currentAuthoritativeMusicState()
+  const serverDjState = authoritativeState?.source === 'dj' ? authoritativeState : null
   const useDjOutput = shouldUseDjOutput()
   const estimator = useDjOutput ? _djBpmEstimator : null
   const ctx = _ctx
@@ -1752,16 +1764,21 @@ function dispatchMusicBpm() {
   const serverBeatAtMs = serverState && !useDjOutput
     ? performance.now() - Math.max(0, serverNow() - serverState.beatStartedAt)
     : null
+  const serverDjBeatAtMs = serverDjState
+    ? performance.now() - Math.max(0, serverNow() - serverDjState.beatStartedAt)
+    : null
 
   window.dispatchEvent(new CustomEvent(MUSIC_BPM_EVENT, {
     detail: {
       bpm,
-      trackIdx: serverState && !useDjOutput ? serverState.trackIdx : _currentTrackIdx,
-      source: useDjOutput ? 'dj' : 'track',
-      bpmSource: useDjOutput ? 'live' : serverState?.bpmSource ?? 'fallback',
-      confidence: useDjOutput ? estimator?.confidence ?? 0 : serverState?.bpmConfidence ?? 0,
-      beatAtMs: useDjOutput ? liveBeatAtMs : serverBeatAtMs,
-      beatIntervalSec: useDjOutput
+      trackIdx: serverDjState ? serverDjState.trackIdx : serverState && !useDjOutput ? serverState.trackIdx : _currentTrackIdx,
+      source: serverDjState ? 'dj' : 'track',
+      bpmSource: serverDjState ? serverDjState.bpmSource ?? 'fallback' : useDjOutput ? 'live' : serverState?.bpmSource ?? 'fallback',
+      confidence: serverDjState ? serverDjState.bpmConfidence ?? 0 : useDjOutput ? estimator?.confidence ?? 0 : serverState?.bpmConfidence ?? 0,
+      beatAtMs: serverDjState ? serverDjBeatAtMs ?? liveBeatAtMs : useDjOutput ? liveBeatAtMs : serverBeatAtMs,
+      beatIntervalSec: serverDjState?.beatIntervalMs
+        ? serverDjState.beatIntervalMs / 1000
+        : useDjOutput
         ? estimator?.beatIntervalSec ?? (bpm ? 60 / bpm : null)
         : serverState?.beatIntervalMs
           ? serverState.beatIntervalMs / 1000
@@ -1779,9 +1796,10 @@ function getEnvironmentGain(environment = _environment, outsideDoorProximity = _
 
 function dispatchMusicOutput(environmentGain = getEnvironmentGain()) {
   const outputBlocked = shouldSuspendHiddenAudioWithoutAccess() || hasActiveExternalMusicOutputOwner()
+  const serverDjSource = shouldUseServerDjSource()
   const useDjOutput = shouldUseDjOutput()
   const maxEnvironmentGain = _environment === 'outside' ? OUTSIDE_BASE_GAIN + OUTSIDE_DOOR_GAIN : 1
-  const heardVolume = outputBlocked ? 0 : _volume * environmentGain
+  const heardVolume = outputBlocked || (serverDjSource && !useDjOutput) ? 0 : _volume * environmentGain
   const serverState = currentServerMusicState()
   const estimator = useDjOutput ? _djBpmEstimator : _trackBpmEstimator
   const useServerDynamics = Boolean(serverState && !useDjOutput)
@@ -1849,7 +1867,7 @@ function sampleMusicBpm() {
 }
 
 function shouldUseDjOutput() {
-  return _djActive && _djPlaybackReady && !_djPlaybackBlocked
+  return shouldUseServerDjSource() && _djActive && _djPlaybackReady && !_djPlaybackBlocked
 }
 
 function getDjOutputVolume() {
@@ -1909,8 +1927,9 @@ function applyOutputState() {
   const doorLeak = Math.pow(_outsideDoorProximity, 0.72)
   const environmentGain = getEnvironmentGain()
   const outputBlocked = shouldSuspendHiddenAudioWithoutAccess() || hasActiveExternalMusicOutputOwner()
+  const serverDjSource = shouldUseServerDjSource()
   const useDjOutput = shouldUseDjOutput()
-  const targetGain = outputBlocked ? 0 : _volume * environmentGain * (useDjOutput ? 0 : 1)
+  const targetGain = outputBlocked ? 0 : _volume * environmentGain * (serverDjSource ? 0 : 1)
 
   gain.gain.cancelScheduledValues(now)
   gain.gain.setValueAtTime(gain.gain.value, now)
@@ -1918,7 +1937,7 @@ function applyOutputState() {
   if (outputBlocked) {
     disconnectMainSpeaker()
     disconnectDjSpeaker()
-  } else if (useDjOutput || _lockscreenActive) disconnectMainSpeaker()
+  } else if (serverDjSource || _lockscreenActive) disconnectMainSpeaker()
   else if (_audioRouteActive && !_lockscreenActive) connectMainSpeaker()
 
   applyEqState(_doorEq, isOutside, doorLeak, now)
@@ -1966,7 +1985,7 @@ function suspendLocalTrackForDj() {
 }
 
 async function resumeLocalTrackAfterDj() {
-  if (!_audioRouteActive || isDocumentHidden()) return
+  if (!_audioRouteActive || isDocumentHidden() || shouldUseServerDjSource()) return
   if (!ensureMusicOutputOwnership()) {
     suspendLocalAudioForExternalOwner()
     return
@@ -2217,7 +2236,6 @@ function shutdownMusicAudioSingleton() {
   _bpmSilentSink = null
   _currentTrackIdx = -1
   _musicTimeline = null
-  _usingLocalFallbackTimeline = false
   _mainSpeakerConnected = false
   _djSpeakerConnected = false
   _lastBroadcastTimeSyncAtMs = 0
@@ -2233,7 +2251,6 @@ export function applyMusicState(
   const { audio, ctx } = getAudioGraph()
   if (_tracks.length === 0) return
   const nextTrackIdx = ((trackIdx % _tracks.length) + _tracks.length) % _tracks.length
-  _usingLocalFallbackTimeline = false
 
   if (typeof syncServerNow === 'number') {
     rememberBroadcastServerTime(syncServerNow, syncClientReceivedAt)
@@ -2298,20 +2315,21 @@ export default function MusicPlayer() {
     }
     await startDjAudioElement()
 
-    if (!audio.src) return false
-    if (shouldUseDjOutput()) {
+    if (shouldUseServerDjSource()) {
       if (!isAudioContextRunning(ctx)) return false
       suspendLocalTrackForDj()
-      setStarted(true)
-      setResumeRequired(false)
-      return true
+      const ready = shouldUseDjOutput()
+      setStarted(ready)
+      setResumeRequired(!ready)
+      return ready
     }
+    if (!audio.src) return false
 
     try {
       await waitForCanPlay(audio)
       await audio.play()
       if (!(await ensureAudioContextRunning(ctx))) return false
-      alignMusicToTimeline(false)
+      alignMusicToTimeline(true)
       if (shouldKeepNativeLockscreenAudio()) {
         const nativeReady = await playLockscreenAudio(true)
         if (nativeReady) {
@@ -2358,6 +2376,16 @@ export default function MusicPlayer() {
     const onServerMusicState = (e: Event) => {
       const { musicState, serverNow, clientReceivedAt } = (e as CustomEvent).detail ?? {}
       applyServerMusicState(musicState, serverNow, clientReceivedAt)
+      const serverDj = shouldUseServerDjSource()
+      setDjLive(serverDj)
+      setDjBlocked(serverDj && !shouldUseDjOutput())
+      if (serverDj) {
+        const ready = shouldUseDjOutput() && !hasActiveExternalMusicOutputOwner()
+        setStarted(ready)
+        setResumeRequired(!ready)
+        return
+      }
+      if (_audio && !_audio.paused) setResumeRequired(false)
     }
     const onEnvironment = (e: Event) => {
       const { environment, outsideDoorProximity } = (e as CustomEvent).detail
@@ -2388,13 +2416,19 @@ export default function MusicPlayer() {
     }
     const onDjState = (e: Event) => {
       const { active, blocked } = (e as CustomEvent).detail ?? {}
-      setDjLive(Boolean(active))
-      setDjBlocked(Boolean(blocked))
-      if (active && !blocked) {
+      const serverDj = shouldUseServerDjSource()
+      setDjLive(serverDj)
+      setDjBlocked(serverDj && Boolean(blocked || !shouldUseDjOutput()))
+      if (serverDj && active && !blocked) {
         setStarted(!hasActiveExternalMusicOutputOwner())
         return
       }
-      if (active && blocked) {
+      if (serverDj) {
+        setStarted(false)
+        setResumeRequired(true)
+        return
+      }
+      if (active || blocked) {
         void ensureMainTrackAudioRoute().then((ok) => {
           if (ok) setStarted(true)
         })
@@ -2416,16 +2450,15 @@ export default function MusicPlayer() {
         stopLockscreenAudio(false)
       }
       void requestScreenWakeLock()
-      if (shouldUseDjOutput()) {
+      if (shouldUseServerDjSource()) {
         stopLockscreenAudio(true)
         connectDjSpeaker()
         const ctxReady = await ensureAudioContextRunning(_ctx)
         await startDjAudioElement()
         applyOutputState()
-        if (ctxReady && !_djPlaybackBlocked) {
-          setStarted(true)
-          setResumeRequired(false)
-        }
+        const ready = ctxReady && shouldUseDjOutput()
+        setStarted(ready)
+        setResumeRequired(!ready)
         return
       }
       if (!_lockscreenActive) {
@@ -2488,7 +2521,7 @@ export default function MusicPlayer() {
         setResumeRequired(false)
         return
       }
-      if (shouldUseDjOutput()) {
+      if (shouldUseServerDjSource()) {
         void playLockscreenDjAudio()
         return
       }
@@ -2519,9 +2552,9 @@ export default function MusicPlayer() {
     const unlock = () => {
       if (!_audioRouteActive) return
       takeMusicOutputOwnership()
-      const useDjOutput = shouldUseDjOutput()
-      const hasActiveAudio = useDjOutput
-        ? !_djPlaybackBlocked && isAudioContextRunning(_ctx)
+      const serverDj = shouldUseServerDjSource()
+      const hasActiveAudio = serverDj
+        ? shouldUseDjOutput() && isAudioContextRunning(_ctx)
         : Boolean(_audio && !_audio.paused && isAudioContextRunning(_ctx))
       const hasNativeLockscreenRoute = _lockscreenActive && _lockscreenSource === 'track' && Boolean(_lockscreenAudio && !_lockscreenAudio.paused)
       if (unlockedRef.current && !_hiddenSuspendedWithoutLockscreenAccess && (hasActiveAudio || hasNativeLockscreenRoute)) return
@@ -2626,9 +2659,13 @@ export default function MusicPlayer() {
 
     if (!isDocumentHidden()) takeMusicOutputOwnership()
     setMusicEnvironment(location.pathname === '/club' ? 'club' : 'outside')
-    if (shouldUseDjOutput()) {
+    if (shouldUseServerDjSource()) {
       suspendLocalTrackForDj()
-      setStarted(true)
+      void startDjAudioElement().then(() => {
+        setStarted(shouldUseDjOutput())
+        setDjLive(true)
+        setDjBlocked(!shouldUseDjOutput())
+      })
       return
     }
     void ensureMainTrackAudioRoute().then((ok) => {

@@ -176,6 +176,7 @@ export function DJBoothPanel({ embedded = false, onMinimize }: DJBoothPanelProps
         if (roomRef.current === room) roomRef.current = null
         trackRef.current = null
         startingRef.current = false
+        gameClient.setDjStreamLive(false)
         setConnection(ConnectionState.Disconnected)
         setListenerCount(0)
         setStatus('idle')
@@ -210,6 +211,7 @@ export function DJBoothPanel({ embedded = false, onMinimize }: DJBoothPanelProps
       })
 
       startMeter(track.mediaStreamTrack)
+      gameClient.setDjStreamLive(true)
       setStatus('live')
     } catch (e: any) {
       pendingAudioSessionRelease?.()
@@ -239,6 +241,7 @@ export function DJBoothPanel({ embedded = false, onMinimize }: DJBoothPanelProps
     }
     track?.stop()
     await room?.disconnect().catch(() => undefined)
+    gameClient.setDjStreamLive(false)
     releaseAudioSession?.()
     setConnection(ConnectionState.Disconnected)
     setListenerCount(0)
