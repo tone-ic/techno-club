@@ -1743,12 +1743,22 @@ export default function ClubPage() {
         voiceT = 0
         window.dispatchEvent(new CustomEvent(PROXIMITY_VOICE_POSITIONS_EVENT, {
           detail: {
-            self: { x: pos.x, z: pos.z },
-            players: Array.from(remotePlayers, ([id, remote]) => ({
-              id,
-              x: remote.position.x,
-              z: remote.position.z,
-            })),
+            self: {
+              x: pos.x,
+              z: pos.z,
+              y: floorHeightAt(pos.x, pos.z, selfFloorLevel),
+              floorLevel: selfFloorLevel,
+            },
+            players: Array.from(remotePlayers, ([id, remote]) => {
+              const floorLevel = isClubFloorLevel(remote.userData.floorLevel) ? remote.userData.floorLevel : 'ground'
+              return {
+                id,
+                x: remote.position.x,
+                z: remote.position.z,
+                y: floorHeightAt(remote.position.x, remote.position.z, floorLevel),
+                floorLevel,
+              }
+            }),
           },
         }))
       }

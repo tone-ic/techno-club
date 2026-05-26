@@ -1113,8 +1113,8 @@ export default function OutsidePage() {
       })
 
       voiceT+=dt; if(voiceT>0.1){voiceT=0;window.dispatchEvent(new CustomEvent(PROXIMITY_VOICE_POSITIONS_EVENT,{detail:{
-        self:{x:pos.x,z:pos.z},
-        players:Array.from(remotePlayers,([id,rg])=>({id,x:rg.position.x,z:rg.position.z})),
+        self:{x:pos.x,z:pos.z,y:0,floorLevel:'ground'},
+        players:Array.from(remotePlayers,([id,rg])=>({id,x:rg.position.x,z:rg.position.z,y:0,floorLevel:'ground'})),
       }}))}
 
       npcs.forEach((npc,i) => {

@@ -14,7 +14,7 @@ import { claimCaptureAudioSession, preferCaptureAudioSession, preferPlaybackAudi
 type VoiceStatus = 'idle' | 'connecting' | 'ready' | 'talking' | 'error'
 type VoiceEnvironment = 'club' | 'outside'
 type VoiceMode = 'ptt' | 'auto'
-type Position2 = { x: number; z: number }
+type Position2 = { x: number; z: number; y?: number; floorLevel?: string }
 type VoiceRemote = {
   playerId: string
   track: RemoteAudioTrack
@@ -81,6 +81,32 @@ function voiceVolumeForDistance(distance: number, environment: VoiceEnvironment)
 
   const t = 1 - (distance - settings.fullDistance) / (settings.maxDistance - settings.fullDistance)
   return Math.pow(clamp(t, 0, 1), 1.85) * settings.ceiling
+}
+
+function verticalVoiceGap(self: Position2, remote: Position2) {
+  if (typeof self.y === 'number' && typeof remote.y === 'number') {
+    return remote.y - self.y
+  }
+  if (self.floorLevel && remote.floorLevel && self.floorLevel !== remote.floorLevel) {
+    return 3.4
+  }
+  return 0
+}
+
+function voiceDistance(self: Position2, remote: Position2) {
+  const dx = remote.x - self.x
+  const dz = remote.z - self.z
+  const dy = verticalVoiceGap(self, remote)
+  return Math.hypot(dx, dy, dz)
+}
+
+function readVoicePosition(value: any): Position2 {
+  return {
+    x: value.x,
+    z: value.z,
+    y: typeof value.y === 'number' && Number.isFinite(value.y) ? value.y : undefined,
+    floorLevel: typeof value.floorLevel === 'string' ? value.floorLevel : undefined,
+  }
 }
 
 function playerIdFromIdentity(identity: unknown) {
@@ -408,7 +434,7 @@ export default function VoiceChat({
     remotesRef.current.forEach((remote) => {
       const pos = players.get(remote.playerId)
       const volume = incomingVoicesEnabledRef.current && pos
-        ? voiceVolumeForDistance(Math.hypot(pos.x - self.x, pos.z - self.z), environmentRef.current)
+        ? voiceVolumeForDistance(voiceDistance(self, pos), environmentRef.current)
         : 0
 
       if (!incomingVoicesEnabledRef.current) {
@@ -870,13 +896,10 @@ export default function VoiceChat({
       for (const player of detail.players ?? []) {
         if (typeof player?.id !== 'string') continue
         if (typeof player.x !== 'number' || typeof player.z !== 'number') continue
-        nextPlayers.set(player.id, { x: player.x, z: player.z })
+        nextPlayers.set(player.id, readVoicePosition(player))
       }
 
-      positionsRef.current = {
-        self: { x: self.x, z: self.z },
-        players: nextPlayers,
-      }
+      positionsRef.current = { self: readVoicePosition(self), players: nextPlayers }
       updateRemoteVolumes()
     }
 
