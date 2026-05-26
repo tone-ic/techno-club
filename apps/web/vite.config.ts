@@ -30,9 +30,10 @@ function musicManifest() {
   }
 
   function manifestJson() {
+    const tracks = scanTracks()
     return JSON.stringify({
-      tracks: scanTracks(),
-      generatedAt: Date.now(),
+      tracks,
+      generatedAt: tracks.reduce((latest, track) => Math.max(latest, track.mtimeMs), 0),
     }, null, 2)
   }
 
