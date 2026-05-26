@@ -11,6 +11,7 @@ import {
 import { getLiveKitToken, LIVEKIT_DJ_ROOM } from '@/utils/livekit'
 import { usePlayerStore } from '@/store/playerStore'
 import { DJ_SCHEDULE_EVENT, gameClient, type DjScheduleItem } from '@/utils/wsClient'
+import { claimCaptureAudioSession, preferCaptureAudioSession } from '@/utils/audioSession'
 
 type DJBoothPanelProps = {
   embedded?: boolean
@@ -49,6 +50,7 @@ export function DJBoothPanel({ embedded = false, onMinimize }: DJBoothPanelProps
   const trackRef = useRef<LocalAudioTrack | null>(null)
   const analyserRef = useRef<AnalyserNode | null>(null)
   const analyserCtxRef = useRef<AudioContext | null>(null)
+  const audioSessionReleaseRef = useRef<(() => void) | null>(null)
   const rafRef = useRef<number | null>(null)
   const startingRef = useRef(false)
 
@@ -77,6 +79,7 @@ export function DJBoothPanel({ embedded = false, onMinimize }: DJBoothPanelProps
 
   const loadDevices = useCallback(async () => {
     let permissionStream: MediaStream | null = null
+    const releaseAudioSession = claimCaptureAudioSession()
     try {
       permissionStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false })
       const list = await navigator.mediaDevices.enumerateDevices()
@@ -88,6 +91,7 @@ export function DJBoothPanel({ embedded = false, onMinimize }: DJBoothPanelProps
       setStatus('error')
     } finally {
       permissionStream?.getTracks().forEach((track) => track.stop())
+      releaseAudioSession()
     }
   }, [])
 
@@ -152,6 +156,7 @@ export function DJBoothPanel({ embedded = false, onMinimize }: DJBoothPanelProps
     setError('')
     setStatus('connecting')
     let liveKitUrl = ''
+    let pendingAudioSessionRelease: (() => void) | null = null
 
     try {
       if (!deviceId) await loadDevices()
@@ -184,11 +189,15 @@ export function DJBoothPanel({ embedded = false, onMinimize }: DJBoothPanelProps
       })
       updateListenerCount()
 
+      pendingAudioSessionRelease = claimCaptureAudioSession()
       const track = await createLocalAudioTrack({
         deviceId: deviceId ? { exact: deviceId } : undefined,
         ...DJ_CAPTURE_CONSTRAINTS,
       })
+      preferCaptureAudioSession()
       trackRef.current = track
+      audioSessionReleaseRef.current = pendingAudioSessionRelease
+      pendingAudioSessionRelease = null
 
       await room.localParticipant.publishTrack(track, {
         name: 'dj_audio',
@@ -203,6 +212,7 @@ export function DJBoothPanel({ embedded = false, onMinimize }: DJBoothPanelProps
       startMeter(track.mediaStreamTrack)
       setStatus('live')
     } catch (e: any) {
+      pendingAudioSessionRelease?.()
       await stopBroadcast()
       setStatus('error')
       const message = e?.message || 'Не удалось запустить DJ stream'
@@ -218,8 +228,10 @@ export function DJBoothPanel({ embedded = false, onMinimize }: DJBoothPanelProps
     stopMeter()
     const track = trackRef.current
     const room = roomRef.current
+    const releaseAudioSession = audioSessionReleaseRef.current
     trackRef.current = null
     roomRef.current = null
+    audioSessionReleaseRef.current = null
     startingRef.current = false
 
     if (track && room) {
@@ -227,6 +239,7 @@ export function DJBoothPanel({ embedded = false, onMinimize }: DJBoothPanelProps
     }
     track?.stop()
     await room?.disconnect().catch(() => undefined)
+    releaseAudioSession?.()
     setConnection(ConnectionState.Disconnected)
     setListenerCount(0)
     setStatus('idle')

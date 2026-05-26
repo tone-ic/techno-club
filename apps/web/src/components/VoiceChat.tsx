@@ -9,6 +9,7 @@ import {
 } from 'livekit-client'
 import { usePlayerStore } from '@/store/playerStore'
 import { getLiveKitToken, LIVEKIT_DJ_ROOM } from '@/utils/livekit'
+import { claimCaptureAudioSession, preferCaptureAudioSession, preferPlaybackAudioSession } from '@/utils/audioSession'
 
 type VoiceStatus = 'idle' | 'connecting' | 'ready' | 'talking' | 'error'
 type VoiceEnvironment = 'club' | 'outside'
@@ -30,6 +31,7 @@ type LocalVoiceCapture = {
   analyser: AnalyserNode
   analyserData: Uint8Array<ArrayBuffer>
   track: LocalAudioTrack
+  releaseAudioSession: () => void
 }
 
 const VOICE_TRACK_NAME = 'voice'
@@ -199,22 +201,9 @@ function voiceErrorMessage(error: any, fallback: string) {
   return message
 }
 
-function preferPlaybackAudioSession() {
-  const audioSession = (navigator as Navigator & {
-    audioSession?: { type?: string }
-  }).audioSession
-  if (!audioSession || typeof audioSession.type !== 'string') return
-
-  for (const type of ['playback', 'ambient', 'auto']) {
-    try {
-      audioSession.type = type
-      return
-    } catch {}
-  }
-}
-
 function dispatchVoiceCaptureAudioState(active: boolean) {
-  preferPlaybackAudioSession()
+  if (active) preferCaptureAudioSession()
+  else preferPlaybackAudioSession()
   window.dispatchEvent(new CustomEvent(VOICE_CAPTURE_AUDIO_STATE_EVENT, {
     detail: { active, updatedAt: Date.now() },
   }))
@@ -222,38 +211,48 @@ function dispatchVoiceCaptureAudioState(active: boolean) {
 
 async function createLocalVoiceCapture(): Promise<LocalVoiceCapture> {
   assertMicrophoneAvailable()
-  preferPlaybackAudioSession()
+  const releaseAudioSession = claimCaptureAudioSession()
+  let sourceStream: MediaStream | null = null
+  let audioContext: AudioContext | null = null
 
-  const sourceStream = await navigator.mediaDevices.getUserMedia({
-    audio: MIC_CAPTURE_CONSTRAINTS,
-    video: false,
-  })
-  preferPlaybackAudioSession()
+  try {
+    sourceStream = await navigator.mediaDevices.getUserMedia({
+      audio: MIC_CAPTURE_CONSTRAINTS,
+      video: false,
+    })
+    preferCaptureAudioSession()
 
-  const mediaTrack = sourceStream.getAudioTracks()[0]
-  if (!mediaTrack) {
-    sourceStream.getTracks().forEach((track) => track.stop())
-    throw new Error('Браузер не вернул аудиотрек микрофона')
-  }
+    const mediaTrack = sourceStream.getAudioTracks()[0]
+    if (!mediaTrack) {
+      sourceStream.getTracks().forEach((track) => track.stop())
+      throw new Error('Браузер не вернул аудиотрек микрофона')
+    }
 
-  const audioContext = new AudioContext()
-  const source = audioContext.createMediaStreamSource(sourceStream)
-  const analyser = audioContext.createAnalyser()
-  analyser.fftSize = 512
-  analyser.smoothingTimeConstant = 0.45
+    audioContext = new AudioContext()
+    const source = audioContext.createMediaStreamSource(sourceStream)
+    const analyser = audioContext.createAnalyser()
+    analyser.fftSize = 512
+    analyser.smoothingTimeConstant = 0.45
 
-  source.connect(analyser)
+    source.connect(analyser)
 
-  const track = new LocalAudioTrack(mediaTrack.clone(), MIC_CAPTURE_CONSTRAINTS, true, audioContext)
-  await track.mute().catch(() => undefined)
-  dispatchVoiceCaptureAudioState(true)
+    const track = new LocalAudioTrack(mediaTrack.clone(), MIC_CAPTURE_CONSTRAINTS, true, audioContext)
+    await track.mute().catch(() => undefined)
+    dispatchVoiceCaptureAudioState(true)
 
-  return {
-    sourceStream,
-    audioContext,
-    analyser,
-    analyserData: new Uint8Array(new ArrayBuffer(analyser.fftSize)),
-    track,
+    return {
+      sourceStream,
+      audioContext,
+      analyser,
+      analyserData: new Uint8Array(new ArrayBuffer(analyser.fftSize)),
+      track,
+      releaseAudioSession,
+    }
+  } catch (error) {
+    sourceStream?.getTracks().forEach((track) => track.stop())
+    await audioContext?.close().catch(() => undefined)
+    releaseAudioSession()
+    throw error
   }
 }
 
@@ -596,6 +595,7 @@ export default function VoiceChat({
     track?.stop()
     capture?.sourceStream.getTracks().forEach((sourceTrack) => sourceTrack.stop())
     await capture?.audioContext.close().catch(() => undefined)
+    capture?.releaseAudioSession()
     dispatchVoiceCaptureAudioState(false)
     dispatchVoiceLevels(0, false, Array.from(remotesRef.current.values()))
   }

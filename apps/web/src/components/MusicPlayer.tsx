@@ -33,6 +33,8 @@ const BPM_WINDOW_SEC = 8
 const BPM_UPDATE_INTERVAL_SEC = 2
 const BPM_MIN_ONSET_GAP_SEC = 0.09
 const BPM_PHASE_LOCK_RADIUS_SEC = 0.14
+const BPM_DOTTED_RELATION_MIN = 84
+const BPM_DOTTED_RELATION_MAX = 112
 const BPM_DISPLAY_FALLBACK = 124
 
 type FluxSample = {
@@ -328,10 +330,11 @@ class LiveBpmEstimator {
         const age = nowSec - this.recentOnsets[j].time
         const strength = Math.sqrt(this.recentOnsets[i].strength * this.recentOnsets[j].strength)
         const score = Math.exp(-age / 12) * strength * (1 - Math.min(0.52, interval / 4)) * this.tempoPrior(bpm)
-        for (let offset = -2; offset <= 2; offset += 1) {
-          const idx = bucket + offset
-          if (idx < 0 || idx >= this.histogram.length) continue
-          this.histogram[idx] += score / (1 + Math.abs(offset))
+        this.addHistogramScore(bucket, score)
+
+        const dottedCandidate = this.dottedRelationCandidate(bpm)
+        if (dottedCandidate) {
+          this.addHistogramScore(Math.round(dottedCandidate) - BPM_MIN, score * 0.58)
         }
       }
     }
@@ -349,6 +352,11 @@ class LiveBpmEstimator {
       const doubled = candidate * 2
       const doubledScore = this.scoreAtBpm(doubled)
       if (doubled <= BPM_MAX && doubledScore >= bestScore * 0.5) return doubled
+    }
+    const dottedCandidate = this.dottedRelationCandidate(candidate)
+    if (dottedCandidate) {
+      const dottedScore = this.scoreNearBpm(dottedCandidate)
+      if (dottedScore >= bestScore * 0.34) return dottedCandidate
     }
     if (candidate > 168) {
       const halved = candidate / 2
@@ -427,6 +435,31 @@ class LiveBpmEstimator {
     const idx = Math.round(bpm) - BPM_MIN
     if (idx < 0 || idx >= this.histogram.length) return 0
     return this.histogram[idx] ?? 0
+  }
+
+  private scoreNearBpm(bpm: number) {
+    const center = Math.round(bpm) - BPM_MIN
+    let score = 0
+    for (let offset = -2; offset <= 2; offset += 1) {
+      const idx = center + offset
+      if (idx < 0 || idx >= this.histogram.length) continue
+      score += (this.histogram[idx] ?? 0) / (1 + Math.abs(offset))
+    }
+    return score
+  }
+
+  private addHistogramScore(bucket: number, score: number) {
+    for (let offset = -2; offset <= 2; offset += 1) {
+      const idx = bucket + offset
+      if (idx < 0 || idx >= this.histogram.length) continue
+      this.histogram[idx] += score / (1 + Math.abs(offset))
+    }
+  }
+
+  private dottedRelationCandidate(bpm: number) {
+    if (bpm < BPM_DOTTED_RELATION_MIN || bpm >= BPM_DOTTED_RELATION_MAX) return null
+    const candidate = bpm * 1.5
+    return candidate <= BPM_MAX ? candidate : null
   }
 }
 
@@ -1433,6 +1466,7 @@ function getAudioGraph() {
 function dispatchDjState(active: boolean) {
   const wasActive = _djActive
   _djActive = active
+  if (active !== wasActive) _lastKnownBpm = null
   if (active) {
     suspendLocalTrackForDj()
   } else if (wasActive) {
@@ -1445,8 +1479,13 @@ function dispatchDjState(active: boolean) {
   dispatchMusicOutput()
 }
 
-function currentMusicBpm() {
-  const estimator = _djActive ? _djBpmEstimator : _trackBpmEstimator
+function currentMusicBpm(serverState = currentServerMusicState()) {
+  if (!_djActive && serverState) {
+    _lastKnownBpm = Math.round(clamp(serverState.bpm, BPM_MIN, BPM_MAX) * 10) / 10
+    return _lastKnownBpm
+  }
+
+  const estimator = _djActive ? _djBpmEstimator : null
   if (estimator?.bpm && estimator.confidence >= LIVE_BPM_MIN_CONFIDENCE) {
     _lastKnownBpm = Math.round(clamp(estimator.reportedBpm ?? estimator.bpm, BPM_MIN, BPM_MAX) * 10) / 10
     return _lastKnownBpm
@@ -1460,12 +1499,15 @@ function currentMusicBpm() {
 }
 
 function dispatchMusicBpm() {
-  const estimator = _djActive ? _djBpmEstimator : _trackBpmEstimator
+  const estimator = _djActive ? _djBpmEstimator : null
   const ctx = _ctx
-  const bpm = currentMusicBpm()
   const serverState = currentServerMusicState()
+  const bpm = currentMusicBpm(serverState)
   const liveBeatAtMs = estimator?.lastBeatAtSec !== null && estimator?.lastBeatAtSec !== undefined && ctx
     ? performance.now() - Math.max(0, ctx.currentTime - estimator.lastBeatAtSec) * 1000
+    : null
+  const serverBeatAtMs = serverState && !_djActive
+    ? performance.now() - Math.max(0, serverNow() - serverState.beatStartedAt)
     : null
 
   window.dispatchEvent(new CustomEvent(MUSIC_BPM_EVENT, {
@@ -1473,9 +1515,14 @@ function dispatchMusicBpm() {
       bpm,
       trackIdx: serverState && !_djActive ? serverState.trackIdx : _currentTrackIdx,
       source: _djActive ? 'dj' : 'track',
-      confidence: estimator?.confidence ?? 0,
-      beatAtMs: liveBeatAtMs,
-      beatIntervalSec: estimator?.beatIntervalSec ?? (bpm ? 60 / bpm : null),
+      bpmSource: _djActive ? 'live' : serverState?.bpmSource ?? 'fallback',
+      confidence: _djActive ? estimator?.confidence ?? 0 : serverState?.bpmConfidence ?? 0,
+      beatAtMs: _djActive ? liveBeatAtMs : serverBeatAtMs,
+      beatIntervalSec: _djActive
+        ? estimator?.beatIntervalSec ?? (bpm ? 60 / bpm : null)
+        : serverState?.beatIntervalMs
+          ? serverState.beatIntervalMs / 1000
+          : bpm ? 60 / bpm : null,
       updatedAt: Date.now(),
     },
   }))

@@ -10,13 +10,20 @@ export interface AudioBpmAnalysis {
 }
 
 const ANALYSIS_SAMPLE_RATE = 11_025
-const ANALYSIS_START_SEC = 12
-const ANALYSIS_DURATION_SEC = 120
-const ANALYSIS_TIMEOUT_MS = 25_000
-const ANALYSIS_MAX_BYTES = ANALYSIS_SAMPLE_RATE * ANALYSIS_DURATION_SEC * 2 + 8192
+const ANALYSIS_INITIAL_SKIP_SEC = 12
+const ANALYSIS_PRIMARY_DURATION_SEC = 120
+const ANALYSIS_MAX_DURATION_SEC = 480
+const ANALYSIS_TIMEOUT_MS = 45_000
+const ANALYSIS_MAX_BYTES = ANALYSIS_SAMPLE_RATE * ANALYSIS_MAX_DURATION_SEC * 2 + 8192
+const BPM_SECTION_COUNT = 4
+const BPM_SECTION_MIN_SEC = 24
+const BPM_SECTION_MAX_SEC = 96
+const BPM_CONSENSUS_RADIUS = 3.8
 const BPM_MIN = 60
 const BPM_MAX = 180
 const BPM_BUCKETS = BPM_MAX - BPM_MIN + 1
+const BPM_DOTTED_RELATION_MIN = 84
+const BPM_DOTTED_RELATION_MAX = 112
 
 export async function analyzeAudioBpm(fullPath: string): Promise<AudioBpmAnalysis> {
   const decoded = await decodeMonoPcm(fullPath)
@@ -30,7 +37,7 @@ export async function analyzeAudioBpm(fullPath: string): Promise<AudioBpmAnalysi
   }
 
   return {
-    ...estimateBpmFromPcm(decoded.pcm, ANALYSIS_SAMPLE_RATE),
+    ...estimateStableBpmFromPcm(decoded.pcm, ANALYSIS_SAMPLE_RATE),
     error: decoded.error,
   }
 }
@@ -49,13 +56,12 @@ function decodeMonoPcm(fullPath: string) {
       '-hide_banner',
       '-loglevel', 'error',
       '-nostdin',
-      '-ss', String(ANALYSIS_START_SEC),
       '-i', fullPath,
       '-vn',
       '-ac', '1',
       '-ar', String(ANALYSIS_SAMPLE_RATE),
       '-f', 's16le',
-      '-t', String(ANALYSIS_DURATION_SEC),
+      '-t', String(ANALYSIS_MAX_DURATION_SEC),
       'pipe:1',
     ]
     const child = spawn(command, args, { windowsHide: true })
@@ -115,6 +121,139 @@ function decodeMonoPcm(fullPath: string) {
       )
     })
   })
+}
+
+interface BpmCandidate {
+  bpm: number
+  confidence: number
+  durationSec: number
+  weight: number
+}
+
+function estimateStableBpmFromPcm(pcm: Buffer, sampleRate: number): Omit<AudioBpmAnalysis, 'error'> {
+  const totalDurationSec = Math.floor(pcm.length / 2) / sampleRate
+  if (totalDurationSec < 8) return { bpm: null, confidence: 0, durationSec: totalDurationSec }
+
+  const primaryStartSec = totalDurationSec > 40 ? Math.min(ANALYSIS_INITIAL_SKIP_SEC, totalDurationSec * 0.08) : 0
+  const primaryDurationSec = Math.min(ANALYSIS_PRIMARY_DURATION_SEC, Math.max(0, totalDurationSec - primaryStartSec))
+  const primary = estimateBpmFromPcm(slicePcmByTime(pcm, sampleRate, primaryStartSec, primaryDurationSec), sampleRate)
+  const candidates: BpmCandidate[] = []
+
+  addBpmCandidate(candidates, primary, 0.9)
+  for (const section of splitPcmIntoAnalysisSections(pcm, sampleRate)) {
+    addBpmCandidate(candidates, estimateBpmFromPcm(section, sampleRate), 1)
+  }
+
+  if (!candidates.length) {
+    return { ...primary, durationSec: totalDurationSec }
+  }
+
+  const anchor = chooseConsensusAnchor(candidates)
+  const compatible = candidates
+    .map((candidate) => ({
+      ...candidate,
+      bpm: alignBpmNear(candidate.bpm, anchor),
+    }))
+    .filter((candidate) => Math.abs(candidate.bpm - anchor) <= BPM_CONSENSUS_RADIUS)
+
+  if (!compatible.length) {
+    return { ...primary, durationSec: totalDurationSec }
+  }
+
+  const weight = compatible.reduce((sum, candidate) => sum + candidate.weight, 0)
+  const bpm = compatible.reduce((sum, candidate) => sum + candidate.bpm * candidate.weight, 0) / weight
+  const confidenceMean = compatible.reduce((sum, candidate) => sum + candidate.confidence * candidate.weight, 0) / weight
+  const agreement = compatible.length / candidates.length
+  const confidence = clamp(confidenceMean * 0.74 + agreement * 0.26, 0, 1)
+
+  return {
+    bpm: Math.round(bpm * 10) / 10,
+    confidence: Math.round(confidence * 1000) / 1000,
+    durationSec: totalDurationSec,
+  }
+}
+
+function addBpmCandidate(
+  candidates: BpmCandidate[],
+  result: Omit<AudioBpmAnalysis, 'error'>,
+  sourceWeight: number,
+) {
+  if (!result.bpm || result.confidence < 0.12) return
+  candidates.push({
+    bpm: result.bpm,
+    confidence: result.confidence,
+    durationSec: result.durationSec,
+    weight: Math.max(0.08, result.confidence) * sourceWeight,
+  })
+}
+
+function splitPcmIntoAnalysisSections(pcm: Buffer, sampleRate: number): Buffer[] {
+  const totalDurationSec = Math.floor(pcm.length / 2) / sampleRate
+  const usableStartSec = totalDurationSec > 48
+    ? Math.min(ANALYSIS_INITIAL_SKIP_SEC, totalDurationSec * 0.08)
+    : 0
+  const usableEndSec = totalDurationSec > 70
+    ? totalDurationSec - Math.min(18, totalDurationSec * 0.06)
+    : totalDurationSec
+  const usableDurationSec = Math.max(0, usableEndSec - usableStartSec)
+  if (usableDurationSec < BPM_SECTION_MIN_SEC) return []
+
+  const sectionDurationSec = clamp(
+    usableDurationSec * 0.82 / BPM_SECTION_COUNT,
+    BPM_SECTION_MIN_SEC,
+    Math.min(BPM_SECTION_MAX_SEC, usableDurationSec),
+  )
+  const sections: Buffer[] = []
+
+  for (let section = 0; section < BPM_SECTION_COUNT; section += 1) {
+    const centerSec = usableStartSec + usableDurationSec * ((section + 0.5) / BPM_SECTION_COUNT)
+    const startSec = clamp(centerSec - sectionDurationSec / 2, usableStartSec, usableEndSec - sectionDurationSec)
+    sections.push(slicePcmByTime(pcm, sampleRate, startSec, sectionDurationSec))
+  }
+
+  return sections
+}
+
+function chooseConsensusAnchor(candidates: BpmCandidate[]) {
+  let bestBpm = candidates[0].bpm
+  let bestSupport = -Infinity
+
+  for (const candidate of candidates) {
+    let support = 0
+    for (const other of candidates) {
+      const aligned = alignBpmNear(other.bpm, candidate.bpm)
+      const distance = Math.abs(aligned - candidate.bpm)
+      support += other.weight * Math.max(0, 1 - distance / (BPM_CONSENSUS_RADIUS * 2.4))
+    }
+    if (support > bestSupport) {
+      bestSupport = support
+      bestBpm = candidate.bpm
+    }
+  }
+
+  return bestBpm
+}
+
+function alignBpmNear(bpm: number, anchor: number) {
+  let best = bpm
+  let bestDistance = Math.abs(bpm - anchor)
+  for (const multiplier of [0.5, 2]) {
+    const candidate = bpm * multiplier
+    if (candidate < BPM_MIN || candidate > BPM_MAX) continue
+    const distance = Math.abs(candidate - anchor)
+    if (distance < bestDistance) {
+      best = candidate
+      bestDistance = distance
+    }
+  }
+  return best
+}
+
+function slicePcmByTime(pcm: Buffer, sampleRate: number, startSec: number, durationSec: number) {
+  const sampleCount = Math.floor(pcm.length / 2)
+  const startSample = clamp(Math.floor(startSec * sampleRate), 0, sampleCount)
+  const endSample = clamp(Math.floor((startSec + durationSec) * sampleRate), startSample, sampleCount)
+  return pcm.subarray(startSample * 2, endSample * 2)
 }
 
 export function estimateBpmFromPcm(pcm: Buffer, sampleRate: number): Omit<AudioBpmAnalysis, 'error'> {
@@ -228,6 +367,8 @@ function addOnsetIntervalScores(histogram: Float64Array, envelope: Float64Array,
       const intervalWeight = 1 - Math.min(0.42, intervalSec / 8)
       const score = Math.sqrt(peaks[i].strength * peaks[j].strength) * ageWeight * intervalWeight * tempoPrior(bpm)
       addBpmScore(histogram, bpm, score, 1.55)
+      const dottedCandidate = dottedRelationCandidate(bpm)
+      if (dottedCandidate) addBpmScore(histogram, dottedCandidate, score * 0.58, 1.8)
     }
   }
 }
@@ -292,6 +433,30 @@ function tempoPrior(bpm: number) {
   return 0.72
 }
 
+function dottedRelationCandidate(bpm: number) {
+  if (bpm < BPM_DOTTED_RELATION_MIN || bpm >= BPM_DOTTED_RELATION_MAX) return null
+  const candidate = bpm * 1.5
+  return candidate <= BPM_MAX ? candidate : null
+}
+
+function scoreNearBpm(histogram: Float64Array, bpm: number) {
+  const center = Math.round(bpm) - BPM_MIN
+  let score = 0
+  for (let offset = -2; offset <= 2; offset += 1) {
+    const idx = center + offset
+    if (idx < 0 || idx >= histogram.length) continue
+    score += (histogram[idx] ?? 0) / (1 + Math.abs(offset))
+  }
+  return score
+}
+
+function correctTempoRelation(bpm: number, histogram: Float64Array, bestScore: number) {
+  const dottedCandidate = dottedRelationCandidate(bpm)
+  if (!dottedCandidate) return bpm
+  const dottedScore = scoreNearBpm(histogram, dottedCandidate)
+  return dottedScore >= bestScore * 0.34 ? dottedCandidate : bpm
+}
+
 function pickTempo(histogram: Float64Array, durationSec: number): Omit<AudioBpmAnalysis, 'error'> {
   let bestIdx = -1
   let bestScore = 0
@@ -325,7 +490,11 @@ function pickTempo(histogram: Float64Array, durationSec: number): Omit<AudioBpmA
     weightedBpm += (idx + BPM_MIN) * score
   }
 
-  const bpm = weightedScore > 0 ? weightedBpm / weightedScore : bestIdx + BPM_MIN
+  const bpm = correctTempoRelation(
+    weightedScore > 0 ? weightedBpm / weightedScore : bestIdx + BPM_MIN,
+    histogram,
+    bestScore,
+  )
   const support = bestScore / totalScore
   const dominance = bestScore / Math.max(secondScore, 0.0001)
   const confidence = clamp((support * 9.5) + Math.min(1, Math.max(0, dominance - 1) * 0.42), 0, 1)
