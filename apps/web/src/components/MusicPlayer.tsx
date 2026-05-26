@@ -918,7 +918,7 @@ function shouldUseNativeLockscreenAudio() {
 }
 
 function canUseLockscreenAudioNow(environment = _environment) {
-  return _audioRouteActive && environment === 'club'
+  return IS_MOBILE_AUDIO && _audioRouteActive && environment === 'club'
 }
 
 function shouldKeepNativeLockscreenAudio() {
@@ -1272,7 +1272,7 @@ function stopLockscreenAudio(syncMain = true) {
     disconnectMainSpeaker()
     disconnectDjSpeaker()
   } else {
-    connectMainSpeaker()
+    if (!_djActive) connectMainSpeaker()
     if (_djActive) connectDjSpeaker()
   }
 }
@@ -1686,14 +1686,18 @@ function applyOutputState() {
     _djElement.volume = 0
   }
   if (_lockscreenAudio) {
-    _lockscreenAudio.volume = hiddenWithoutAccess
+    const trackLockscreenActive = _lockscreenActive && _lockscreenSource === 'track'
+    _lockscreenAudio.volume = hiddenWithoutAccess || !trackLockscreenActive
       ? 0
       : lockscreenElementVolume(_lockscreenAudio, _lockscreenOutput?.stream ?? null, getLockscreenTrackVolume())
+    if (!trackLockscreenActive && !_lockscreenAudio.paused) _lockscreenAudio.pause()
   }
   if (_djLockscreenElement) {
-    _djLockscreenElement.volume = hiddenWithoutAccess
+    const djLockscreenActive = _lockscreenActive && _lockscreenSource === 'dj'
+    _djLockscreenElement.volume = hiddenWithoutAccess || !djLockscreenActive
       ? 0
       : lockscreenElementVolume(_djLockscreenElement, _djLockscreenOutput?.stream ?? null, getLockscreenDjVolume())
+    if (!djLockscreenActive && !_djLockscreenElement.paused) _djLockscreenElement.pause()
   }
   updateMediaSession((hiddenWithoutAccess || (_audio?.paused && !_lockscreenActive)) ? 'paused' : 'playing')
   dispatchMusicOutput(environmentGain)

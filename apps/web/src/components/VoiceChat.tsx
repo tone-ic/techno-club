@@ -23,6 +23,7 @@ type VoiceRemote = {
   source: MediaStreamAudioSourceNode | null
   analyser: AnalyserNode | null
   analyserData: Uint8Array<ArrayBuffer> | null
+  gain: GainNode | null
   level: number
 }
 type LocalVoiceCapture = {
@@ -40,15 +41,15 @@ export const PROXIMITY_VOICE_POSITIONS_EVENT = 'proximity-voice-positions'
 export const VOICE_TALKING_EVENT = 'voice-talking'
 export const VOICE_LEVELS_EVENT = 'voice-levels'
 const MIC_CAPTURE_CONSTRAINTS: MediaTrackConstraints & { voiceIsolation?: boolean } = {
-  echoCancellation: false,
-  noiseSuppression: false,
-  autoGainControl: false,
-  voiceIsolation: false,
+  echoCancellation: true,
+  noiseSuppression: true,
+  autoGainControl: true,
+  voiceIsolation: true,
   channelCount: 1,
 }
-const VAD_OPEN_RMS = 0.035
-const VAD_CLOSE_RMS = 0.022
-const VAD_CLOSE_DELAY_MS = 520
+const VAD_OPEN_RMS = 0.012
+const VAD_CLOSE_RMS = 0.0065
+const VAD_CLOSE_DELAY_MS = 820
 const VOICE_ENVIRONMENT_SETTINGS: Record<VoiceEnvironment, {
   fullDistance: number
   maxDistance: number
@@ -145,8 +146,14 @@ function detachRemoteElement(remote: VoiceRemote) {
 function applyRemoteVolume(remote: VoiceRemote, volume: number) {
   const nextVolume = clamp(volume, 0, 1)
   const shouldMute = nextVolume <= VOICE_VOLUME_EPSILON
+  const webAudioGain = remote.gain
 
   if (shouldMute) {
+    if (webAudioGain) {
+      const now = webAudioGain.context.currentTime
+      webAudioGain.gain.cancelScheduledValues(now)
+      webAudioGain.gain.setTargetAtTime(0, now, 0.04)
+    }
     if (remote.element) {
       remote.element.volume = 0
       remote.element.muted = true
@@ -156,11 +163,22 @@ function applyRemoteVolume(remote: VoiceRemote, volume: number) {
     return
   }
 
-  const element = attachRemoteElement(remote)
-  remote.track.setVolume(nextVolume)
-  element.volume = nextVolume
-  element.muted = false
-  element.play().catch(() => undefined)
+  if (webAudioGain) {
+    const now = webAudioGain.context.currentTime
+    webAudioGain.gain.cancelScheduledValues(now)
+    webAudioGain.gain.setTargetAtTime(nextVolume, now, 0.06)
+    remote.track.setVolume(0)
+    if (remote.element) {
+      remote.element.volume = 0
+      remote.element.muted = true
+    }
+  } else {
+    const element = attachRemoteElement(remote)
+    remote.track.setVolume(nextVolume)
+    element.volume = nextVolume
+    element.muted = false
+    element.play().catch(() => undefined)
+  }
   remote.lastVolume = nextVolume
 }
 
@@ -332,12 +350,17 @@ export default function VoiceChat({
       const ctx = ensureRemoteAudioContext()
       const source = ctx.createMediaStreamSource(new MediaStream([mediaTrack]))
       const analyser = ctx.createAnalyser()
+      const gain = ctx.createGain()
       analyser.fftSize = 512
       analyser.smoothingTimeConstant = 0.5
+      gain.gain.value = 0
       source.connect(analyser)
+      source.connect(gain)
+      gain.connect(ctx.destination)
       remote.source = source
       remote.analyser = analyser
       remote.analyserData = new Uint8Array(new ArrayBuffer(analyser.fftSize))
+      remote.gain = gain
       ctx.resume().catch(() => undefined)
     } catch (error) {
       console.warn('[VoiceChat] remote voice analyser unavailable:', error)
@@ -346,9 +369,11 @@ export default function VoiceChat({
 
   const detachRemoteAnalyser = (remote: VoiceRemote) => {
     remote.source?.disconnect()
+    remote.gain?.disconnect()
     remote.source = null
     remote.analyser = null
     remote.analyserData = null
+    remote.gain = null
     remote.level = 0
   }
 
@@ -387,15 +412,17 @@ export default function VoiceChat({
         : 0
 
       if (!incomingVoicesEnabledRef.current) {
-        if (remote.element || remote.lastVolume > 0) detachRemoteElement(remote)
+        if (remote.element) detachRemoteElement(remote)
+        if (remote.lastVolume > 0) applyRemoteVolume(remote, 0)
         return
       }
 
-      const elementOutOfSync =
-        !remote.element ||
-        Math.abs(remote.element.volume - volume) > VOICE_VOLUME_EPSILON ||
-        remote.element.muted !== (volume <= VOICE_VOLUME_EPSILON) ||
-        (volume > VOICE_VOLUME_EPSILON && remote.element.paused)
+      const elementOutOfSync = remote.gain
+        ? false
+        : !remote.element ||
+          Math.abs(remote.element.volume - volume) > VOICE_VOLUME_EPSILON ||
+          remote.element.muted !== (volume <= VOICE_VOLUME_EPSILON) ||
+          (volume > VOICE_VOLUME_EPSILON && remote.element.paused)
 
       if (Math.abs(volume - remote.lastVolume) > VOICE_VOLUME_EPSILON || elementOutOfSync) {
         applyRemoteVolume(remote, volume)
@@ -442,6 +469,7 @@ export default function VoiceChat({
       source: null,
       analyser: null,
       analyserData: null,
+      gain: null,
       level: 0,
     }
     remotesRef.current.set(playerId, remote)
@@ -459,6 +487,7 @@ export default function VoiceChat({
     if (!room || !incomingVoicesEnabledRef.current) return
 
     await room.startAudio().catch(() => undefined)
+    await remoteAudioContextRef.current?.resume().catch(() => undefined)
     updateRemoteVolumes()
   }
 
