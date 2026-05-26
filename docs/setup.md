@@ -218,6 +218,14 @@ BLENDER_AUTORIG_TIMEOUT_MS=180000
 
 Если `blender --version` не работает из терминала API, укажи полный путь в `BLENDER_PATH`, например `C:\Program Files\Blender Foundation\Blender 4.2\blender.exe`. Когда Blender выключен или autorig падает, API сохраняет исходный TRELLIS GLB и возвращает `autorig.status: "disabled"` или `"failed"`.
 
+### Blender autorig на Fly.io
+
+API Docker image устанавливает системный Blender и запускает autorig через `/usr/bin/blender`. Для production держи API VM не меньше `2048mb`: Blender часто падает или уходит в timeout на маленьких `256mb` инстансах. После изменения `apps/api/fly.toml` нужен новый деплой API:
+
+```bash
+fly deploy -c apps/api/fly.toml
+```
+
 ### Pixal3D через Hugging Face Space для dev
 
 Если локального GPU нет, можно временно использовать публичный Pixal3D-Server как dev-провайдер. API выбирает опубликованный `gradio.live` инстанс с минимальной очередью и сохраняет готовый GLB в Supabase:

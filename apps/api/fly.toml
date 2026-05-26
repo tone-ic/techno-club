@@ -12,10 +12,13 @@ primary_region = "fra"
   min_machines_running = 1
 
 [[vm]]
-  memory = "256mb"
+  memory = "2048mb"
   cpu_kind = "shared"
-  cpus = 1
+  cpus = 2
 
 [env]
   PORT = "3001"
   NODE_ENV = "production"
+  BLENDER_AUTORIG_ENABLED = "1"
+  BLENDER_PATH = "/usr/bin/blender"
+  BLENDER_AUTORIG_TIMEOUT_MS = "300000"

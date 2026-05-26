@@ -565,6 +565,7 @@ let _djMediaStreamTrack: MediaStreamTrack | null = null
 let _djLockscreenOutput: MediaStreamAudioDestinationNode | null = null
 let _djActive = false
 let _djPlaybackBlocked = false
+let _djPlaybackReady = false
 const _musicOutputTabId = createMusicOutputTabId()
 let _musicOutputOwnerId: string | null = null
 let _musicOutputOwnerExpiresAt = 0
@@ -1817,7 +1818,7 @@ function sampleMusicBpm() {
 }
 
 function shouldUseDjOutput() {
-  return _djActive && !_djPlaybackBlocked
+  return _djActive && _djPlaybackReady && !_djPlaybackBlocked
 }
 
 function getDjOutputVolume() {
@@ -1978,8 +1979,10 @@ async function startDjAudioElement() {
   await _djRoom?.startAudio().catch(() => undefined)
   try {
     await _djElement.play()
+    _djPlaybackReady = true
     _djPlaybackBlocked = false
   } catch {
+    _djPlaybackReady = false
     _djPlaybackBlocked = true
   }
   dispatchDjState(_djActive)
@@ -1990,11 +1993,13 @@ function attachDjTrack(track: RemoteAudioTrack) {
   detachDjTrack(false)
 
   _djTrack = track
+  _djPlaybackReady = false
+  _djPlaybackBlocked = true
   _djDoorEq = createDoorEqGraph(ctx)
   _djElement = track.attach() as HTMLAudioElement
   _djElement.autoplay = true
-  _djElement.muted = true
-  _djElement.volume = 0
+  _djElement.muted = false
+  _djElement.volume = 1
   _djElement.style.display = 'none'
   document.body.appendChild(_djElement)
   track.setVolume(0)
@@ -2051,6 +2056,7 @@ function detachDjTrack(updateState = true) {
   _djLockscreenOutput = null
   _djBpmAnalyser = null
   _djBpmEstimator = null
+  _djPlaybackReady = false
   _djPlaybackBlocked = false
   if (updateState) {
     dispatchDjState(false)
@@ -2084,6 +2090,7 @@ async function connectLiveKitDjRoom() {
     _djRoom = null
   }
   const handleAudioPlayback = (playing: boolean) => {
+    _djPlaybackReady = playing
     _djPlaybackBlocked = !playing
     dispatchDjState(_djActive)
   }

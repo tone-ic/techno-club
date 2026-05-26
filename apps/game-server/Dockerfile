@@ -17,6 +17,7 @@ RUN apk add --no-cache ffmpeg
 COPY --from=builder /app/apps/game-server/dist ./dist
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/apps/game-server/package.json ./package.json
+COPY apps/web/public/music ./apps/web/public/music
 
 EXPOSE 2567
 CMD ["node", "dist/index.js"]
