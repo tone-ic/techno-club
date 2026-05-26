@@ -496,7 +496,6 @@ let _lastOutsideRouteEnsureAt = 0
 let _mainSpeakerConnected = false
 let _djSpeakerConnected = false
 let _audioRouteActive = false
-let _lastTimelineSeekAtMs = 0
 let _lastBroadcastTimeSyncAtMs = 0
 const IS_IOS_AUDIO =
   typeof navigator !== 'undefined' &&
@@ -508,11 +507,9 @@ const IS_MOBILE_AUDIO =
     (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1))
 const MUSIC_DEADBAND_SEC = IS_IOS_AUDIO ? 0.08 : 0.12
 const MUSIC_START_SEEK_DRIFT_SEC = IS_IOS_AUDIO ? 0.3 : 0.45
-const MUSIC_SEEK_DRIFT_SEC = IS_IOS_AUDIO ? 0.75 : 0.65
 const MUSIC_RATE_HORIZON_SEC = 6
 const MUSIC_MAX_RATE_DELTA = IS_IOS_AUDIO ? 0 : 0.006
 const MUSIC_SYNC_INTERVAL_MS = IS_IOS_AUDIO ? 1200 : 500
-const MUSIC_MIN_SEEK_INTERVAL_MS = IS_IOS_AUDIO ? 2500 : 5000
 const BROADCAST_TIME_SYNC_MIN_INTERVAL_MS = 1_000
 const BROADCAST_TIME_SYNC_MAX_STEP_MS = 120
 const MUSIC_RESTORE_RETRY_DELAYS_MS = [0, 80, 250, 700, 1500, 3000, 6000] as const
@@ -930,13 +927,11 @@ function alignMusicToTimeline(forceSeek = false) {
   if (_audio.readyState < 2) return
 
   const targetTime = getTrackPosition(_musicTimeline.startedAt, _audio.duration)
+  if (!Number.isFinite(targetTime)) return
   const drift = signedTrackDriftSec(_audio.currentTime, targetTime, _audio.duration)
   const absDrift = Math.abs(drift)
 
-  const nowMs = Date.now()
-  const canHardSeek = forceSeek || nowMs - _lastTimelineSeekAtMs >= MUSIC_MIN_SEEK_INTERVAL_MS
-  if ((forceSeek || absDrift >= MUSIC_SEEK_DRIFT_SEC) && canHardSeek) {
-    _lastTimelineSeekAtMs = nowMs
+  if (forceSeek && absDrift >= MUSIC_DEADBAND_SEC) {
     seekAudioTo(_audio, targetTime)
     _audio.playbackRate = 1
     return
@@ -1646,7 +1641,7 @@ async function ensureMainTrackAudioRouteInner() {
     return true
   } catch {
     if (!audio.paused && isAudioContextRunning(ctx)) {
-      alignMusicToTimeline(true)
+      alignMusicToTimeline(false)
       stopLockscreenAudio(false)
       applyOutputState()
       return true
@@ -2225,7 +2220,6 @@ function shutdownMusicAudioSingleton() {
   _usingLocalFallbackTimeline = false
   _mainSpeakerConnected = false
   _djSpeakerConnected = false
-  _lastTimelineSeekAtMs = 0
   _lastBroadcastTimeSyncAtMs = 0
 }
 
@@ -2253,7 +2247,6 @@ export function applyMusicState(
   if (_currentTrackIdx !== nextTrackIdx) {
     // Новый трек — загружаем и встаём на нужную позицию
     _currentTrackIdx = nextTrackIdx
-    _lastTimelineSeekAtMs = 0
     _trackBpmEstimator?.reset()
     _lastKnownBpm = null
     audio.src = _tracks[nextTrackIdx]
@@ -2318,7 +2311,7 @@ export default function MusicPlayer() {
       await waitForCanPlay(audio)
       await audio.play()
       if (!(await ensureAudioContextRunning(ctx))) return false
-      alignMusicToTimeline(true)
+      alignMusicToTimeline(false)
       if (shouldKeepNativeLockscreenAudio()) {
         const nativeReady = await playLockscreenAudio(true)
         if (nativeReady) {

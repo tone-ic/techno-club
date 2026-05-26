@@ -343,6 +343,7 @@ function refreshMusicTrackState(force = false) {
   if (!force && now < nextMusicScanAt) return
   nextMusicScanAt = now + MUSIC_SCAN_INTERVAL_MS
 
+  const currentTrackFileName = musicTrackInfos[musicTrackIdx]?.fileName
   const next = scanMusicTrackState()
   if (next.signature === musicTracksSignature) return
 
@@ -350,8 +351,15 @@ function refreshMusicTrackState(force = false) {
   musicTrackCount = Math.max(1, next.count)
   musicTrackInfos = next.tracks
   musicDurationsSec.clear()
-  if (musicTrackIdx >= musicTrackCount) musicTrackIdx = 0
-  musicStartedAt = now
+  const nextCurrentTrackIdx = currentTrackFileName
+    ? next.tracks.findIndex(track => track.fileName === currentTrackFileName)
+    : -1
+  if (nextCurrentTrackIdx >= 0) {
+    musicTrackIdx = nextCurrentTrackIdx
+  } else {
+    musicTrackIdx = Math.min(musicTrackIdx, musicTrackCount - 1)
+    musicStartedAt = now
+  }
   broadcastMusicSync()
 }
 
