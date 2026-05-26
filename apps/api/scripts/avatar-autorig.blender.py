@@ -407,9 +407,14 @@ def export_glb(filepath):
         "export_draco_mesh_compression_enable": False,
     }
     try:
-        bpy.ops.export_scene.gltf(**quality_kwargs)
+        result = bpy.ops.export_scene.gltf(**quality_kwargs)
     except TypeError:
-        bpy.ops.export_scene.gltf(**export_kwargs)
+        result = bpy.ops.export_scene.gltf(**export_kwargs)
+
+    if "CANCELLED" in result:
+        raise RuntimeError(f"GLB export was cancelled for {filepath}")
+    if not filepath.exists() or filepath.stat().st_size < 12:
+        raise RuntimeError(f"GLB export did not create a valid file: {filepath}")
 
 
 def main():

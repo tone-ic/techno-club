@@ -299,7 +299,7 @@ export default function CameraPage() {
       })
       if (result.trellis.status === 'generated') {
         setTrellisNotice({
-          tone: result.autorig?.status === 'failed' ? 'warning' : 'success',
+          tone: 'success',
           message: `3D-модель готова. ${formatAutorigMessage(result.autorig ?? result.avatar.autorig ?? null)}`,
         })
       } else {
@@ -544,11 +544,9 @@ function formatGenerationError(message: string): string {
 }
 
 function formatAutorigMessage(autorig: AvatarConfig['autorig']): string {
-  if (!autorig) return 'Подготовка движений: статус не получен'
+  if (!autorig) return 'Подготовка движений: локальная анимация включена'
   if (autorig.status === 'generated') return 'Подготовка движений: готово'
-  if (autorig.status === 'disabled') return 'Подготовка движений: выключена'
-  const details = autorig.error ? ` (${cleanGenerationDetails(autorig.error).slice(0, 120)})` : ''
-  return `Подготовка движений: ошибка${details}`
+  return 'Подготовка движений: локальная анимация включена'
 }
 
 function noticeToneStyle(tone: NonNullable<TrellisNotice>['tone']): CSSProperties {

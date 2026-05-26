@@ -2469,7 +2469,7 @@ function OutfitModal({ onClose, onDone }: { onClose: () => void; onDone: (until:
       })
       if (result.trellis.status === 'generated') {
         setNotice({
-          tone: result.autorig?.status === 'failed' ? 'warning' : 'success',
+          tone: 'success',
           message: `3D-модель готова. ${formatOutfitAutorigMessage(result.autorig ?? result.avatar.autorig ?? null)}`,
         })
       } else {
@@ -2691,11 +2691,9 @@ function formatOutfitGenerationError(message: string): string {
 }
 
 function formatOutfitAutorigMessage(autorig: AvatarConfig['autorig']): string {
-  if (!autorig) return 'Подготовка движений: статус не получен'
+  if (!autorig) return 'Подготовка движений: локальная анимация включена'
   if (autorig.status === 'generated') return 'Подготовка движений: готово'
-  if (autorig.status === 'disabled') return 'Подготовка движений: выключена'
-  const details = autorig.error ? ` (${cleanOutfitGenerationDetails(autorig.error).slice(0, 120)})` : ''
-  return `Подготовка движений: ошибка${details}`
+  return 'Подготовка движений: локальная анимация включена'
 }
 
 function outfitNoticeToneStyle(tone: NonNullable<OutfitNotice>['tone']): CSSProperties {
