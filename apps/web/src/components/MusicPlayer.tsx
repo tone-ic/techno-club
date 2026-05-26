@@ -496,6 +496,8 @@ let _lastOutsideRouteEnsureAt = 0
 let _mainSpeakerConnected = false
 let _djSpeakerConnected = false
 let _audioRouteActive = false
+let _lastTimelineSeekAtMs = 0
+let _lastBroadcastTimeSyncAtMs = 0
 const IS_IOS_AUDIO =
   typeof navigator !== 'undefined' &&
   (/iP(hone|ad|od)/.test(navigator.userAgent) ||
@@ -504,12 +506,15 @@ const IS_MOBILE_AUDIO =
   typeof navigator !== 'undefined' &&
   (/Android|iP(hone|ad|od)/.test(navigator.userAgent) ||
     (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1))
-const MUSIC_DEADBAND_SEC = IS_IOS_AUDIO ? 0.08 : 0.01
-const MUSIC_START_SEEK_DRIFT_SEC = IS_IOS_AUDIO ? 0.3 : 0.08
-const MUSIC_SEEK_DRIFT_SEC = IS_IOS_AUDIO ? 0.75 : 0.08
-const MUSIC_RATE_HORIZON_SEC = 2.5
-const MUSIC_MAX_RATE_DELTA = IS_IOS_AUDIO ? 0 : 0.012
-const MUSIC_SYNC_INTERVAL_MS = IS_IOS_AUDIO ? 1200 : 100
+const MUSIC_DEADBAND_SEC = IS_IOS_AUDIO ? 0.08 : 0.12
+const MUSIC_START_SEEK_DRIFT_SEC = IS_IOS_AUDIO ? 0.3 : 0.45
+const MUSIC_SEEK_DRIFT_SEC = IS_IOS_AUDIO ? 0.75 : 0.65
+const MUSIC_RATE_HORIZON_SEC = 6
+const MUSIC_MAX_RATE_DELTA = IS_IOS_AUDIO ? 0 : 0.006
+const MUSIC_SYNC_INTERVAL_MS = IS_IOS_AUDIO ? 1200 : 500
+const MUSIC_MIN_SEEK_INTERVAL_MS = IS_IOS_AUDIO ? 2500 : 5000
+const BROADCAST_TIME_SYNC_MIN_INTERVAL_MS = 1_000
+const BROADCAST_TIME_SYNC_MAX_STEP_MS = 120
 const MUSIC_RESTORE_RETRY_DELAYS_MS = [0, 80, 250, 700, 1500, 3000, 6000] as const
 const OUTSIDE_ROUTE_ENSURE_INTERVAL_MS = 900
 const OUTSIDE_PROXIMITY_APPLY_EPSILON = 0.01
@@ -832,9 +837,17 @@ function rememberBroadcastServerTime(syncServerNow: number, clientReceivedAt: nu
   if (!Number.isFinite(syncServerNow) || !Number.isFinite(clientReceivedAt)) return
   const estimatedOneWayMs = Number.isFinite(_bestTimeSyncRttMs) ? _bestTimeSyncRttMs / 2 : 0
   const offsetMs = syncServerNow + estimatedOneWayMs - clientReceivedAt
-  _serverOffsetMs = Number.isFinite(_bestTimeSyncRttMs)
-    ? _serverOffsetMs * 0.9 + offsetMs * 0.1
-    : offsetMs
+  if (!Number.isFinite(offsetMs)) return
+  if (!Number.isFinite(_bestTimeSyncRttMs)) {
+    _serverOffsetMs = offsetMs
+    return
+  }
+
+  const now = Date.now()
+  if (now - _lastBroadcastTimeSyncAtMs < BROADCAST_TIME_SYNC_MIN_INTERVAL_MS) return
+  _lastBroadcastTimeSyncAtMs = now
+  const deltaMs = clamp(offsetMs - _serverOffsetMs, -BROADCAST_TIME_SYNC_MAX_STEP_MS, BROADCAST_TIME_SYNC_MAX_STEP_MS)
+  _serverOffsetMs += deltaMs * 0.08
 }
 
 function isServerMusicState(value: unknown): value is MusicServerState {
@@ -920,7 +933,10 @@ function alignMusicToTimeline(forceSeek = false) {
   const drift = signedTrackDriftSec(_audio.currentTime, targetTime, _audio.duration)
   const absDrift = Math.abs(drift)
 
-  if (forceSeek || absDrift >= MUSIC_SEEK_DRIFT_SEC) {
+  const nowMs = Date.now()
+  const canHardSeek = forceSeek || nowMs - _lastTimelineSeekAtMs >= MUSIC_MIN_SEEK_INTERVAL_MS
+  if ((forceSeek || absDrift >= MUSIC_SEEK_DRIFT_SEC) && canHardSeek) {
+    _lastTimelineSeekAtMs = nowMs
     seekAudioTo(_audio, targetTime)
     _audio.playbackRate = 1
     return
@@ -1089,6 +1105,25 @@ function isDocumentHidden() {
 
 function isAudioContextRunning(ctx: AudioContext | null): ctx is AudioContext {
   return Boolean(ctx && ctx.state === 'running')
+}
+
+function resetMediaElement(element: HTMLAudioElement | null, removeFromDom = false) {
+  if (!element) return
+  element.pause()
+  element.muted = true
+  element.volume = 0
+  element.srcObject = null
+  element.removeAttribute('src')
+  element.load()
+  if (removeFromDom) element.remove()
+}
+
+function safeDisconnectNode(node: AudioNode | null | undefined) {
+  try {
+    node?.disconnect()
+  } catch {
+    // Already disconnected nodes are fine during teardown.
+  }
 }
 
 async function resumeAudioContext(ctx: AudioContext | null) {
@@ -1682,6 +1717,7 @@ function dispatchDjState(active: boolean) {
   } else if (active || wasActive) {
     void resumeLocalTrackAfterDj()
   }
+  if (_ctx && _gain) applyOutputState()
   window.dispatchEvent(new CustomEvent('dj-stream-state', {
     detail: { active, blocked: _djPlaybackBlocked }
   }))
@@ -1977,6 +2013,8 @@ async function startDjAudioElement() {
     return
   }
   await _djRoom?.startAudio().catch(() => undefined)
+  _djElement.muted = true
+  _djElement.volume = 0
   try {
     await _djElement.play()
     _djPlaybackReady = true
@@ -1998,8 +2036,8 @@ function attachDjTrack(track: RemoteAudioTrack) {
   _djDoorEq = createDoorEqGraph(ctx)
   _djElement = track.attach() as HTMLAudioElement
   _djElement.autoplay = true
-  _djElement.muted = false
-  _djElement.volume = 1
+  _djElement.muted = true
+  _djElement.volume = 0
   _djElement.style.display = 'none'
   document.body.appendChild(_djElement)
   track.setVolume(0)
@@ -2010,7 +2048,7 @@ function attachDjTrack(track: RemoteAudioTrack) {
   if (mediaStreamTrack) {
     _djMediaStreamTrack = mediaStreamTrack
     _djGain = ctx.createGain()
-    _djGain.gain.value = getDjOutputVolume()
+    _djGain.gain.value = 0
     _djLockscreenOutput = ctx.createMediaStreamDestination()
     _djBpmAnalyser = createBpmAnalyser(ctx)
     _djBpmEstimator = new LiveBpmEstimator(_djBpmAnalyser)
@@ -2023,7 +2061,7 @@ function attachDjTrack(track: RemoteAudioTrack) {
   } else {
     track.setAudioContext(ctx)
     track.setWebAudioPlugins(_djDoorEq.nodes)
-    track.setVolume(getDjOutputVolume())
+    track.setVolume(0)
   }
 
   dispatchDjState(true)
@@ -2033,23 +2071,32 @@ function attachDjTrack(track: RemoteAudioTrack) {
 }
 
 function detachDjTrack(updateState = true) {
+  const hadDjOutput = Boolean(
+    _djActive ||
+    _djTrack ||
+    _djElement ||
+    _djLockscreenElement ||
+    _djMediaStreamTrack ||
+    _djSource ||
+    _djGain
+  )
   if (_djTrack && _djElement) {
     _djTrack.detach(_djElement)
   } else {
     _djTrack?.detach()
   }
-  _djElement?.remove()
-  _djLockscreenElement?.pause()
-  _djLockscreenElement?.remove()
+  resetMediaElement(_djElement, true)
+  resetMediaElement(_djLockscreenElement, true)
   _djTrack = null
   _djElement = null
   _djLockscreenElement = null
   _djMediaStreamTrack = null
-  _djSource?.disconnect()
+  safeDisconnectNode(_djSource)
   disconnectDjSpeaker()
-  _djDoorEq?.nodes.forEach((node) => node.disconnect())
-  _djGain?.disconnect()
-  _djBpmAnalyser?.disconnect()
+  _djDoorEq?.nodes.forEach(safeDisconnectNode)
+  safeDisconnectNode(_djGain)
+  safeDisconnectNode(_djLockscreenOutput)
+  safeDisconnectNode(_djBpmAnalyser)
   _djSource = null
   _djDoorEq = null
   _djGain = null
@@ -2058,7 +2105,7 @@ function detachDjTrack(updateState = true) {
   _djBpmEstimator = null
   _djPlaybackReady = false
   _djPlaybackBlocked = false
-  if (updateState) {
+  if (updateState && hadDjOutput) {
     dispatchDjState(false)
     applyOutputState()
   }
@@ -2113,10 +2160,73 @@ async function connectLiveKitDjRoom() {
   return room
 }
 
-function disconnectLiveKitDjRoom() {
-  detachDjTrack()
-  _djRoom?.disconnect().catch(() => {})
+function disconnectLiveKitDjRoom(updateState = true) {
+  const room = _djRoom
   _djRoom = null
+  detachDjTrack(updateState)
+  if (!updateState) {
+    try {
+      ;(room as any)?.removeAllListeners?.()
+    } catch {
+      // Best-effort: older room instances may not expose EventEmitter helpers.
+    }
+  }
+  room?.disconnect().catch(() => {})
+}
+
+function shutdownMusicAudioSingleton() {
+  _audioRouteActive = false
+  _lockscreenActive = false
+  _lockscreenSource = null
+  _lockscreenSwitching = false
+  _mainAudioRestoring = false
+  _mainTrackRoutePromise = null
+  _hiddenSuspendedWithoutLockscreenAccess = false
+  _djActive = false
+  _djPlaybackReady = false
+  _djPlaybackBlocked = false
+
+  stopMusicOutputOwnerHeartbeat()
+  releaseMusicOutputOwnership()
+  _musicOutputOwnerChannel?.close()
+  _musicOutputOwnerChannel = null
+  releaseScreenWakeLock()
+  disconnectLiveKitDjRoom(false)
+
+  resetMediaElement(_audio)
+  resetMediaElement(_lockscreenAudio)
+  resetMediaElement(_djElement, true)
+  resetMediaElement(_djLockscreenElement, true)
+
+  disconnectMainSpeaker()
+  disconnectDjSpeaker()
+  safeDisconnectNode(_source)
+  _doorEq?.nodes.forEach(safeDisconnectNode)
+  safeDisconnectNode(_gain)
+  safeDisconnectNode(_lockscreenOutput)
+  safeDisconnectNode(_trackBpmAnalyser)
+  safeDisconnectNode(_bpmSilentSink)
+  const ctx = _ctx
+  if (ctx && ctx.state !== 'closed') void ctx.close().catch(() => undefined)
+
+  _audio = null
+  _ctx = null
+  _gain = null
+  _filter = null
+  _doorEq = null
+  _source = null
+  _trackBpmAnalyser = null
+  _trackBpmEstimator = null
+  _lockscreenAudio = null
+  _lockscreenOutput = null
+  _bpmSilentSink = null
+  _currentTrackIdx = -1
+  _musicTimeline = null
+  _usingLocalFallbackTimeline = false
+  _mainSpeakerConnected = false
+  _djSpeakerConnected = false
+  _lastTimelineSeekAtMs = 0
+  _lastBroadcastTimeSyncAtMs = 0
 }
 
 // ── Синхронизация от сервера ──────────────────────────────────────────────────
@@ -2143,6 +2253,7 @@ export function applyMusicState(
   if (_currentTrackIdx !== nextTrackIdx) {
     // Новый трек — загружаем и встаём на нужную позицию
     _currentTrackIdx = nextTrackIdx
+    _lastTimelineSeekAtMs = 0
     _trackBpmEstimator?.reset()
     _lastKnownBpm = null
     audio.src = _tracks[nextTrackIdx]
@@ -2374,7 +2485,6 @@ export default function MusicPlayer() {
       scheduleMainAudioRestore()
     }
     const useLockscreenAudio = () => {
-      if (!IS_MOBILE_AUDIO) return
       if (hasActiveExternalMusicOutputOwner()) {
         suspendLocalAudioForExternalOwner()
         return
@@ -2474,15 +2584,11 @@ export default function MusicPlayer() {
       window.removeEventListener('keydown',     unlock, true)
       audio.removeEventListener('play', onPlay)
       clearRestoreTimers()
-      stopLockscreenAudio(false)
       window.clearInterval(syncTimer)
       window.clearInterval(manifestTimer)
       window.clearInterval(bpmAnalysisTimer)
       window.clearInterval(bpmTimer)
-      disconnectLiveKitDjRoom()
-      releaseMusicOutputOwnership()
-      _musicOutputOwnerChannel?.close()
-      _musicOutputOwnerChannel = null
+      shutdownMusicAudioSingleton()
     }
   }, [])
 
@@ -2643,4 +2749,10 @@ export default function MusicPlayer() {
       </div>
     </>
   )
+}
+
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    shutdownMusicAudioSingleton()
+  })
 }
