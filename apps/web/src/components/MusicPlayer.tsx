@@ -542,6 +542,15 @@ const BPM_ANALYSIS_INTERVAL_MS = 250
 const BPM_BROADCAST_INTERVAL_MS = 1_000
 const LIVE_BPM_MIN_CONFIDENCE = 0.12
 const SERVER_MUSIC_STATE_STALE_MS = 3_500
+const MUSIC_OUTPUT_OWNER_STORAGE_KEY = 'doorclub:music-output-owner'
+const MUSIC_OUTPUT_OWNER_CHANNEL = 'doorclub:music-output-owner'
+const MUSIC_OUTPUT_OWNER_TTL_MS = 7_000
+const MUSIC_OUTPUT_OWNER_HEARTBEAT_MS = 2_000
+
+type MusicOutputOwnerRecord = {
+  ownerId: string
+  expiresAt: number
+}
 
 let _djRoom: Room | null = null
 let _djSource: MediaStreamAudioSourceNode | null = null
@@ -556,6 +565,11 @@ let _djMediaStreamTrack: MediaStreamTrack | null = null
 let _djLockscreenOutput: MediaStreamAudioDestinationNode | null = null
 let _djActive = false
 let _djPlaybackBlocked = false
+const _musicOutputTabId = createMusicOutputTabId()
+let _musicOutputOwnerId: string | null = null
+let _musicOutputOwnerExpiresAt = 0
+let _musicOutputOwnerChannel: BroadcastChannel | null = null
+let _musicOutputOwnerHeartbeat: number | null = null
 let _hiddenSuspendedWithoutLockscreenAccess = false
 let _lastKnownBpm: number | null = null
 let _screenWakeLock: { release: () => Promise<void>; addEventListener?: (type: string, listener: () => void) => void } | null = null
@@ -624,6 +638,7 @@ function connectNodeChain(nodes: AudioNode[], destination: AudioNode) {
 }
 
 function connectMainSpeaker() {
+  if (hasActiveExternalMusicOutputOwner()) return
   if (!_ctx || !_gain || _mainSpeakerConnected) return
   _gain.connect(_ctx.destination)
   _mainSpeakerConnected = true
@@ -640,6 +655,7 @@ function disconnectMainSpeaker() {
 }
 
 function connectDjSpeaker() {
+  if (hasActiveExternalMusicOutputOwner()) return
   if (!_ctx || !_djGain || _djSpeakerConnected) return
   _djGain.connect(_ctx.destination)
   _djSpeakerConnected = true
@@ -653,6 +669,124 @@ function disconnectDjSpeaker() {
     return
   }
   _djSpeakerConnected = false
+}
+
+function createMusicOutputTabId() {
+  const randomId = globalThis.crypto?.randomUUID?.()
+  if (randomId) return randomId
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+}
+
+function parseMusicOutputOwnerRecord(value: unknown): MusicOutputOwnerRecord | null {
+  try {
+    const record = typeof value === 'string' ? JSON.parse(value) : value
+    if (!record || typeof record !== 'object') return null
+    const owner = record as Partial<MusicOutputOwnerRecord>
+    if (typeof owner.ownerId !== 'string' || typeof owner.expiresAt !== 'number') return null
+    if (!owner.ownerId || !Number.isFinite(owner.expiresAt)) return null
+    return { ownerId: owner.ownerId, expiresAt: owner.expiresAt }
+  } catch {
+    return null
+  }
+}
+
+function rememberMusicOutputOwner(record: MusicOutputOwnerRecord | null) {
+  _musicOutputOwnerId = record?.ownerId ?? null
+  _musicOutputOwnerExpiresAt = record?.expiresAt ?? 0
+}
+
+function readMusicOutputOwner() {
+  if (typeof window === 'undefined') return null
+  try {
+    const record = parseMusicOutputOwnerRecord(window.localStorage.getItem(MUSIC_OUTPUT_OWNER_STORAGE_KEY))
+    if (record) rememberMusicOutputOwner(record)
+    return record ?? (_musicOutputOwnerId
+      ? { ownerId: _musicOutputOwnerId, expiresAt: _musicOutputOwnerExpiresAt }
+      : null)
+  } catch {
+    return _musicOutputOwnerId
+      ? { ownerId: _musicOutputOwnerId, expiresAt: _musicOutputOwnerExpiresAt }
+      : null
+  }
+}
+
+function isFreshMusicOutputOwner(record: MusicOutputOwnerRecord | null) {
+  return Boolean(record && record.expiresAt > Date.now())
+}
+
+function hasActiveExternalMusicOutputOwner() {
+  const owner = readMusicOutputOwner()
+  return Boolean(isFreshMusicOutputOwner(owner) && owner!.ownerId !== _musicOutputTabId)
+}
+
+function postMusicOutputOwner(record: MusicOutputOwnerRecord) {
+  try {
+    _musicOutputOwnerChannel?.postMessage(record)
+  } catch {
+    // Another tab will also observe localStorage when available.
+  }
+}
+
+function writeMusicOutputOwner(record: MusicOutputOwnerRecord) {
+  rememberMusicOutputOwner(record)
+  try {
+    window.localStorage.setItem(MUSIC_OUTPUT_OWNER_STORAGE_KEY, JSON.stringify(record))
+  } catch {
+    // localStorage can be blocked; BroadcastChannel plus in-memory state still helps.
+  }
+  postMusicOutputOwner(record)
+}
+
+function stopMusicOutputOwnerHeartbeat() {
+  if (_musicOutputOwnerHeartbeat === null || typeof window === 'undefined') return
+  window.clearInterval(_musicOutputOwnerHeartbeat)
+  _musicOutputOwnerHeartbeat = null
+}
+
+function startMusicOutputOwnerHeartbeat() {
+  if (_musicOutputOwnerHeartbeat !== null || typeof window === 'undefined') return
+  _musicOutputOwnerHeartbeat = window.setInterval(() => {
+    const owner = readMusicOutputOwner()
+    if (!_audioRouteActive || (isFreshMusicOutputOwner(owner) && owner!.ownerId !== _musicOutputTabId)) {
+      stopMusicOutputOwnerHeartbeat()
+      return
+    }
+    writeMusicOutputOwner({
+      ownerId: _musicOutputTabId,
+      expiresAt: Date.now() + MUSIC_OUTPUT_OWNER_TTL_MS,
+    })
+  }, MUSIC_OUTPUT_OWNER_HEARTBEAT_MS)
+}
+
+function takeMusicOutputOwnership() {
+  if (typeof window === 'undefined') return true
+  writeMusicOutputOwner({
+    ownerId: _musicOutputTabId,
+    expiresAt: Date.now() + MUSIC_OUTPUT_OWNER_TTL_MS,
+  })
+  startMusicOutputOwnerHeartbeat()
+  return true
+}
+
+function ensureMusicOutputOwnership() {
+  if (typeof window === 'undefined') return true
+  if (hasActiveExternalMusicOutputOwner()) return false
+  return takeMusicOutputOwnership()
+}
+
+function releaseMusicOutputOwnership() {
+  if (typeof window === 'undefined') return
+  const owner = readMusicOutputOwner()
+  if (owner?.ownerId === _musicOutputTabId) {
+    try {
+      window.localStorage.removeItem(MUSIC_OUTPUT_OWNER_STORAGE_KEY)
+    } catch {
+      // Nothing else to release when localStorage is blocked.
+    }
+    postMusicOutputOwner({ ownerId: _musicOutputTabId, expiresAt: 0 })
+    rememberMusicOutputOwner(null)
+  }
+  stopMusicOutputOwnerHeartbeat()
 }
 
 function getBpmSilentSink(ctx: AudioContext) {
@@ -800,6 +934,10 @@ function alignMusicToTimeline(forceSeek = false) {
 }
 
 function playTimelineAudio(alignAfterStart = false) {
+  if (!ensureMusicOutputOwnership()) {
+    suspendLocalAudioForExternalOwner()
+    return
+  }
   if (shouldSuspendHiddenAudioWithoutAccess()) {
     suspendHiddenAudioWithoutAccess()
     return
@@ -1133,6 +1271,7 @@ function syncLockscreenAudioFromMain(useNativeElement = shouldUseNativeLockscree
 
 async function primeLockscreenAudio() {
   if (!IS_MOBILE_AUDIO) return
+  if (hasActiveExternalMusicOutputOwner()) return
   if (!hasLockscreenMusicAccess()) return
   await primeTrackLockscreenAudio()
   await primeDjLockscreenAudio()
@@ -1184,6 +1323,10 @@ async function primeDjLockscreenAudio() {
 async function playLockscreenAudio(alignAfterStart = false) {
   const useNativeElement = shouldUseNativeLockscreenAudio()
   const keepNativeRoute = useNativeElement && shouldKeepNativeLockscreenAudio()
+  if (!ensureMusicOutputOwnership()) {
+    suspendLocalAudioForExternalOwner()
+    return false
+  }
   if (!hasLockscreenMusicAccess()) {
     stopLockscreenAudio(true)
     return false
@@ -1233,6 +1376,10 @@ async function playLockscreenAudio(alignAfterStart = false) {
 
 async function playLockscreenDjAudio() {
   const useNativeElement = shouldUseNativeLockscreenAudio()
+  if (!ensureMusicOutputOwnership()) {
+    suspendLocalAudioForExternalOwner()
+    return
+  }
   if (!hasLockscreenMusicAccess()) {
     stopLockscreenAudio(true)
     return
@@ -1304,6 +1451,31 @@ function stopLockscreenAudio(syncMain = true) {
     if (!shouldUseDjOutput()) connectMainSpeaker()
     if (shouldUseDjOutput()) connectDjSpeaker()
   }
+}
+
+function suspendLocalAudioForExternalOwner() {
+  _audio?.pause()
+  _lockscreenAudio?.pause()
+  if (_lockscreenAudio) {
+    _lockscreenAudio.volume = 0
+    _lockscreenAudio.muted = true
+  }
+  _djLockscreenElement?.pause()
+  if (_djLockscreenElement) {
+    _djLockscreenElement.volume = 0
+    _djLockscreenElement.muted = true
+  }
+  _lockscreenActive = false
+  _lockscreenSource = null
+  disconnectMainSpeaker()
+  disconnectDjSpeaker()
+  if (_djTrack) _djTrack.setVolume(0)
+  if (_djElement) {
+    _djElement.muted = true
+    _djElement.volume = 0
+  }
+  updateMediaSession('paused')
+  dispatchMusicOutput(0)
 }
 
 function suspendHiddenAudioWithoutAccess() {
@@ -1382,6 +1554,10 @@ async function ensureMainTrackAudioRoute() {
 
 async function ensureMainTrackAudioRouteInner() {
   if (!_audioRouteActive) return false
+  if (!ensureMusicOutputOwnership()) {
+    suspendLocalAudioForExternalOwner()
+    return false
+  }
   if (shouldSuspendHiddenAudioWithoutAccess()) {
     suspendHiddenAudioWithoutAccess()
     return false
@@ -1570,14 +1746,14 @@ function getEnvironmentGain(environment = _environment, outsideDoorProximity = _
 }
 
 function dispatchMusicOutput(environmentGain = getEnvironmentGain()) {
-  const hiddenWithoutAccess = shouldSuspendHiddenAudioWithoutAccess()
+  const outputBlocked = shouldSuspendHiddenAudioWithoutAccess() || hasActiveExternalMusicOutputOwner()
   const useDjOutput = shouldUseDjOutput()
   const maxEnvironmentGain = _environment === 'outside' ? OUTSIDE_BASE_GAIN + OUTSIDE_DOOR_GAIN : 1
-  const heardVolume = hiddenWithoutAccess ? 0 : _volume * environmentGain
+  const heardVolume = outputBlocked ? 0 : _volume * environmentGain
   const serverState = currentServerMusicState()
   const estimator = useDjOutput ? _djBpmEstimator : _trackBpmEstimator
   const useServerDynamics = Boolean(serverState && !useDjOutput)
-  const sourcePlaying = hiddenWithoutAccess
+  const sourcePlaying = outputBlocked
     ? false
     : useDjOutput
       ? Boolean(_djTrack || _djMediaStreamTrack || (_djElement && !_djElement.paused))
@@ -1700,14 +1876,14 @@ function applyOutputState() {
   const isOutside = _environment === 'outside'
   const doorLeak = Math.pow(_outsideDoorProximity, 0.72)
   const environmentGain = getEnvironmentGain()
-  const hiddenWithoutAccess = shouldSuspendHiddenAudioWithoutAccess()
+  const outputBlocked = shouldSuspendHiddenAudioWithoutAccess() || hasActiveExternalMusicOutputOwner()
   const useDjOutput = shouldUseDjOutput()
-  const targetGain = hiddenWithoutAccess ? 0 : _volume * environmentGain * (useDjOutput ? 0 : 1)
+  const targetGain = outputBlocked ? 0 : _volume * environmentGain * (useDjOutput ? 0 : 1)
 
   gain.gain.cancelScheduledValues(now)
   gain.gain.setValueAtTime(gain.gain.value, now)
   gain.gain.linearRampToValueAtTime(targetGain, now + 0.08)
-  if (hiddenWithoutAccess) {
+  if (outputBlocked) {
     disconnectMainSpeaker()
     disconnectDjSpeaker()
   } else if (useDjOutput || _lockscreenActive) disconnectMainSpeaker()
@@ -1718,31 +1894,31 @@ function applyOutputState() {
   if (_djGain) {
     _djGain.gain.cancelScheduledValues(now)
     _djGain.gain.setValueAtTime(_djGain.gain.value, now)
-    _djGain.gain.linearRampToValueAtTime(hiddenWithoutAccess || !useDjOutput ? 0 : _volume * environmentGain, now + 0.08)
+    _djGain.gain.linearRampToValueAtTime(outputBlocked || !useDjOutput ? 0 : _volume * environmentGain, now + 0.08)
   }
   applyEqState(_djDoorEq, isOutside, doorLeak, now)
 
   const djVolume = getDjOutputVolume()
-  _djTrack?.setVolume(hiddenWithoutAccess || !useDjOutput || _djGain ? 0 : _lockscreenSource === 'dj' ? 0 : djVolume)
+  _djTrack?.setVolume(outputBlocked || !useDjOutput || _djGain ? 0 : _lockscreenSource === 'dj' ? 0 : djVolume)
   if (_djElement) {
     _djElement.muted = true
     _djElement.volume = 0
   }
   if (_lockscreenAudio) {
     const trackLockscreenActive = _lockscreenActive && _lockscreenSource === 'track'
-    _lockscreenAudio.volume = hiddenWithoutAccess || !trackLockscreenActive
+    _lockscreenAudio.volume = outputBlocked || !trackLockscreenActive
       ? 0
       : lockscreenElementVolume(_lockscreenAudio, _lockscreenOutput?.stream ?? null, getLockscreenTrackVolume())
     if (!trackLockscreenActive && !_lockscreenAudio.paused) _lockscreenAudio.pause()
   }
   if (_djLockscreenElement) {
     const djLockscreenActive = _lockscreenActive && _lockscreenSource === 'dj'
-    _djLockscreenElement.volume = hiddenWithoutAccess || !djLockscreenActive
+    _djLockscreenElement.volume = outputBlocked || !djLockscreenActive
       ? 0
       : lockscreenElementVolume(_djLockscreenElement, _djLockscreenOutput?.stream ?? null, getLockscreenDjVolume())
     if (!djLockscreenActive && !_djLockscreenElement.paused) _djLockscreenElement.pause()
   }
-  updateMediaSession((hiddenWithoutAccess || (!useDjOutput && _audio?.paused && !_lockscreenActive)) ? 'paused' : 'playing')
+  updateMediaSession((outputBlocked || (!useDjOutput && _audio?.paused && !_lockscreenActive)) ? 'paused' : 'playing')
   dispatchMusicOutput(environmentGain)
 }
 
@@ -1759,6 +1935,10 @@ function suspendLocalTrackForDj() {
 
 async function resumeLocalTrackAfterDj() {
   if (!_audioRouteActive || isDocumentHidden()) return
+  if (!ensureMusicOutputOwnership()) {
+    suspendLocalAudioForExternalOwner()
+    return
+  }
   if (_lockscreenSource === 'dj') {
     _djLockscreenElement?.pause()
     _lockscreenActive = false
@@ -1787,6 +1967,10 @@ export function setMusicEnvironment(environment: 'club' | 'outside', outsideDoor
 
 async function startDjAudioElement() {
   if (!_djElement) return
+  if (!ensureMusicOutputOwnership()) {
+    suspendLocalAudioForExternalOwner()
+    return
+  }
   if (shouldSuspendHiddenAudioWithoutAccess()) {
     suspendHiddenAudioWithoutAccess()
     return
@@ -1945,7 +2129,9 @@ export function applyMusicState(
   }
   _musicTimeline = { trackIdx: nextTrackIdx, startedAt }
 
-  if (!shouldSuspendHiddenAudioWithoutAccess()) void resumeAudioContext(ctx)
+  const blockedByExternalOwner = hasActiveExternalMusicOutputOwner()
+  if (blockedByExternalOwner) suspendLocalAudioForExternalOwner()
+  if (!blockedByExternalOwner && !shouldSuspendHiddenAudioWithoutAccess()) void resumeAudioContext(ctx)
 
   if (_currentTrackIdx !== nextTrackIdx) {
     // Новый трек — загружаем и встаём на нужную позицию
@@ -1991,6 +2177,7 @@ export default function MusicPlayer() {
     _hiddenSuspendedWithoutLockscreenAccess = false
     void requestScreenWakeLock()
     const { audio, ctx } = getAudioGraph()
+    takeMusicOutputOwnership()
     stopLockscreenAudio(true)
     if (!(await ensureAudioContextRunning(ctx))) return false
     await ensurePlayableMusicTimeline()
@@ -2034,6 +2221,25 @@ export default function MusicPlayer() {
     const { audio } = getAudioGraph()
     void refreshMusicTracks()
 
+    const handleExternalMusicOutputOwner = (record: MusicOutputOwnerRecord | null) => {
+      if (!isFreshMusicOutputOwner(record) || record!.ownerId === _musicOutputTabId) return
+      rememberMusicOutputOwner(record)
+      stopMusicOutputOwnerHeartbeat()
+      suspendLocalAudioForExternalOwner()
+      setStarted(false)
+      setResumeRequired(false)
+    }
+    if (typeof BroadcastChannel !== 'undefined') {
+      _musicOutputOwnerChannel?.close()
+      _musicOutputOwnerChannel = new BroadcastChannel(MUSIC_OUTPUT_OWNER_CHANNEL)
+      _musicOutputOwnerChannel.onmessage = (event) => {
+        handleExternalMusicOutputOwner(parseMusicOutputOwnerRecord(event.data))
+      }
+    }
+    const onMusicOutputOwnerStorage = (event: StorageEvent) => {
+      if (event.key !== MUSIC_OUTPUT_OWNER_STORAGE_KEY) return
+      handleExternalMusicOutputOwner(parseMusicOutputOwnerRecord(event.newValue))
+    }
     const onSync = (e: Event) => {
       const { trackIdx, startedAt, serverNow, clientReceivedAt } = (e as CustomEvent).detail
       applyMusicState(trackIdx, startedAt, serverNow, clientReceivedAt)
@@ -2074,7 +2280,7 @@ export default function MusicPlayer() {
       setDjLive(Boolean(active))
       setDjBlocked(Boolean(blocked))
       if (active && !blocked) {
-        setStarted(true)
+        setStarted(!hasActiveExternalMusicOutputOwner())
         return
       }
       if (active && blocked) {
@@ -2090,6 +2296,10 @@ export default function MusicPlayer() {
     }
     const restoreMainAudio = async () => {
       if (isDocumentHidden() || !_audioRouteActive) return
+      if (!ensureMusicOutputOwnership()) {
+        suspendLocalAudioForExternalOwner()
+        return
+      }
       if (_hiddenSuspendedWithoutLockscreenAccess) {
         _hiddenSuspendedWithoutLockscreenAccess = false
         stopLockscreenAudio(false)
@@ -2143,6 +2353,10 @@ export default function MusicPlayer() {
         restoreTimers.push(timer)
       })
     }
+    const claimAndScheduleMainAudioRestore = () => {
+      if (_audioRouteActive) takeMusicOutputOwnership()
+      scheduleMainAudioRestore()
+    }
     const onVoiceCaptureAudioState = (event: Event) => {
       const active = Boolean((event as CustomEvent).detail?.active)
       if (active) {
@@ -2154,6 +2368,10 @@ export default function MusicPlayer() {
     }
     const useLockscreenAudio = () => {
       if (!IS_MOBILE_AUDIO) return
+      if (hasActiveExternalMusicOutputOwner()) {
+        suspendLocalAudioForExternalOwner()
+        return
+      }
       if (!hasLockscreenMusicAccess()) {
         suspendHiddenAudioWithoutAccess()
         setStarted(false)
@@ -2172,9 +2390,10 @@ export default function MusicPlayer() {
       if (document.visibilityState === 'hidden') {
         useLockscreenAudio()
       } else {
-        scheduleMainAudioRestore()
+        claimAndScheduleMainAudioRestore()
       }
     }
+    window.addEventListener('storage', onMusicOutputOwnerStorage)
     window.addEventListener('music-sync', onSync)
     window.addEventListener(MUSIC_SERVER_STATE_EVENT, onServerMusicState)
     window.addEventListener('music-environment', onEnvironment)
@@ -2182,13 +2401,14 @@ export default function MusicPlayer() {
     window.addEventListener('dj-stream-state', onDjState)
     document.addEventListener('visibilitychange', onVisibilityChange)
     window.addEventListener('pagehide', useLockscreenAudio)
-    window.addEventListener('pageshow', scheduleMainAudioRestore)
-    window.addEventListener('focus', scheduleMainAudioRestore)
+    window.addEventListener('pageshow', claimAndScheduleMainAudioRestore)
+    window.addEventListener('focus', claimAndScheduleMainAudioRestore)
     document.addEventListener('resume', scheduleMainAudioRestore)
     window.addEventListener(VOICE_CAPTURE_AUDIO_STATE_EVENT, onVoiceCaptureAudioState)
 
     const unlock = () => {
       if (!_audioRouteActive) return
+      takeMusicOutputOwnership()
       const useDjOutput = shouldUseDjOutput()
       const hasActiveAudio = useDjOutput
         ? !_djPlaybackBlocked && isAudioContextRunning(_ctx)
@@ -2211,7 +2431,14 @@ export default function MusicPlayer() {
     window.addEventListener('click', unlock, true)
     window.addEventListener('keydown',     unlock, true)
 
-    const onPlay = () => setStarted(true)
+    const onPlay = () => {
+      if (hasActiveExternalMusicOutputOwner()) {
+        suspendLocalAudioForExternalOwner()
+        setStarted(false)
+        return
+      }
+      setStarted(true)
+    }
     audio.addEventListener('play', onPlay)
     const syncTimer = window.setInterval(() => alignMusicToTimeline(), MUSIC_SYNC_INTERVAL_MS)
     const manifestTimer = window.setInterval(() => void refreshMusicTracks(), MUSIC_MANIFEST_REFRESH_MS)
@@ -2221,14 +2448,15 @@ export default function MusicPlayer() {
 
     return () => {
       window.removeEventListener('music-sync', onSync)
+      window.removeEventListener('storage', onMusicOutputOwnerStorage)
       window.removeEventListener(MUSIC_SERVER_STATE_EVENT, onServerMusicState)
       window.removeEventListener('music-environment', onEnvironment)
       window.removeEventListener('server-time', onServerTime)
       window.removeEventListener('dj-stream-state', onDjState)
       document.removeEventListener('visibilitychange', onVisibilityChange)
       window.removeEventListener('pagehide', useLockscreenAudio)
-      window.removeEventListener('pageshow', scheduleMainAudioRestore)
-      window.removeEventListener('focus', scheduleMainAudioRestore)
+      window.removeEventListener('pageshow', claimAndScheduleMainAudioRestore)
+      window.removeEventListener('focus', claimAndScheduleMainAudioRestore)
       document.removeEventListener('resume', scheduleMainAudioRestore)
       window.removeEventListener(VOICE_CAPTURE_AUDIO_STATE_EVENT, onVoiceCaptureAudioState)
       window.removeEventListener('pointerdown', unlock, true)
@@ -2245,6 +2473,9 @@ export default function MusicPlayer() {
       window.clearInterval(bpmAnalysisTimer)
       window.clearInterval(bpmTimer)
       disconnectLiveKitDjRoom()
+      releaseMusicOutputOwnership()
+      _musicOutputOwnerChannel?.close()
+      _musicOutputOwnerChannel = null
     }
   }, [])
 
@@ -2279,6 +2510,7 @@ export default function MusicPlayer() {
       getAudioGraph().audio.pause()
       stopLockscreenAudio(false)
       disconnectLiveKitDjRoom()
+      releaseMusicOutputOwnership()
       setStarted(false)
       setResumeRequired(false)
       setDjLive(false)
@@ -2286,6 +2518,7 @@ export default function MusicPlayer() {
       return
     }
 
+    if (!isDocumentHidden()) takeMusicOutputOwnership()
     setMusicEnvironment(location.pathname === '/club' ? 'club' : 'outside')
     if (shouldUseDjOutput()) {
       suspendLocalTrackForDj()
