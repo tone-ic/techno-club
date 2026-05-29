@@ -126,12 +126,25 @@ export interface AvatarPipelineEvent {
   stage: AvatarPipelineStage
   progress: number
   message: string
+  sourceImage?: string
   prepared?: PreparedModelPhoto
   result?: StreamedTrellisAvatarResult
 }
 
 export type StreamedTrellisAvatarResult = TrellisAvatarResult & {
   prepared?: PreparedModelPhoto
+}
+
+export interface AvatarGenerationStatus {
+  active: boolean
+  job?: {
+    id: string
+    status: 'running' | 'succeeded' | 'failed'
+    createdAt: number
+    updatedAt: number
+    lastEvent: AvatarPipelineEvent | null
+    result: StreamedTrellisAvatarResult | null
+  }
 }
 
 export async function generateTrellisAvatar(
@@ -149,17 +162,45 @@ export async function generateTrellisAvatarStream(
   fallbackConfig: AvatarConfig,
   onEvent: (event: AvatarPipelineEvent) => void,
 ): Promise<StreamedTrellisAvatarResult> {
+  return openTrellisAvatarStream(onEvent, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fullbodyImage, fallbackConfig }),
+  })
+}
+
+export async function resumeTrellisAvatarStream(
+  onEvent: (event: AvatarPipelineEvent) => void,
+): Promise<StreamedTrellisAvatarResult> {
+  return openTrellisAvatarStream(onEvent, { method: 'GET' })
+}
+
+export async function getTrellisAvatarGenerationStatus(): Promise<AvatarGenerationStatus> {
+  const accessToken = await getFreshAccessToken()
+  if (!accessToken) return { active: false }
+
+  const response = await fetch(`${API_URL}/avatar/generation-status`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  }).catch(() => null)
+
+  if (!response?.ok) return { active: false }
+  return response.json() as Promise<AvatarGenerationStatus>
+}
+
+async function openTrellisAvatarStream(
+  onEvent: (event: AvatarPipelineEvent) => void,
+  init: RequestInit,
+): Promise<StreamedTrellisAvatarResult> {
   const accessToken = await getFreshAccessToken()
   if (!accessToken) throw new Error('Нужна авторизация для генерации 3D-модели')
 
   const response = await fetch(`${API_URL}/avatar/generate-stream`, {
-    method: 'POST',
+    ...init,
     headers: {
       Accept: 'text/event-stream',
-      'Content-Type': 'application/json',
       Authorization: `Bearer ${accessToken}`,
+      ...(init.headers ?? {}),
     },
-    body: JSON.stringify({ fullbodyImage, fallbackConfig }),
   }).catch((error) => {
     throw new Error(
       `Не удалось подключиться к API ${API_URL}. Запусти pnpm dev:api или общий pnpm dev. ${error?.message ?? ''}`.trim()
@@ -242,6 +283,7 @@ function parseSseBlock(block: string): AvatarPipelineEvent | null {
       stage: parsed.stage ?? (fallbackType === 'error' ? 'failed' : 'done'),
       progress: typeof parsed.progress === 'number' ? parsed.progress : 0,
       message: typeof parsed.message === 'string' ? parsed.message : data,
+      sourceImage: typeof parsed.sourceImage === 'string' ? parsed.sourceImage : undefined,
       prepared: parsed.prepared,
       result: parsed.result,
     }

@@ -31,6 +31,8 @@ const PIXAL3D_RANDOMIZE_SEED = true
 const MAX_PIXAL3D_SEED = 2_147_483_647
 const MAX_IMAGE_DATA_URL_BYTES = 7_000_000
 const MAX_MODEL_UPLOAD_BYTES = numberFromEnv('MAX_AVATAR_MODEL_UPLOAD_BYTES', 45_000_000)
+const AVATAR_GENERATION_JOB_TTL_MS = Number(process.env.AVATAR_GENERATION_JOB_TTL_MS || 15 * 60_000)
+const AVATAR_GENERATION_ACTIVE_TTL_MS = Number(process.env.AVATAR_GENERATION_ACTIVE_TTL_MS || 3 * 60 * 60_000)
 const HF_CONNECT_TIMEOUT_MS = 45_000
 const HF_PREPROCESS_TIMEOUT_MS = 90_000
 const HF_GENERATE_TIMEOUT_MS = 300_000
@@ -77,6 +79,7 @@ const PIXAL3D_HF_GENERATION_SETTINGS = {
   manualFov: -1,
   fovUnit: 'deg',
 } as const
+const avatarGenerationJobs = new Map<string, AvatarGenerationJob>()
 const TRELLIS_HF_GENERATION_SETTINGS = {
   seed: 0,
   resolution: '1024',
@@ -226,6 +229,8 @@ interface PreparedModelPhoto {
 }
 
 type AvatarPipelineStage =
+  | 'source'
+  | 'fallback'
   | 'kie_upload'
   | 'kie_create'
   | 'kie_wait'
@@ -246,11 +251,27 @@ interface AvatarPipelineEvent {
   stage: AvatarPipelineStage
   progress: number
   message: string
+  sourceImage?: string
   prepared?: PreparedModelPhoto
   result?: unknown
 }
 
 type AvatarProgressEmit = (event: AvatarPipelineEvent) => Promise<void> | void
+
+type AvatarGenerationJobStatus = 'running' | 'succeeded' | 'failed'
+type AvatarGenerationSubscriber = (event: AvatarPipelineEvent) => Promise<void>
+
+interface AvatarGenerationJob {
+  id: string
+  userId: string
+  status: AvatarGenerationJobStatus
+  createdAt: number
+  updatedAt: number
+  events: AvatarPipelineEvent[]
+  subscribers: Set<AvatarGenerationSubscriber>
+  promise: Promise<void>
+  cleanupTimer: ReturnType<typeof setTimeout> | null
+}
 
 type AuthResult =
   | { user: User; error?: never }
@@ -1978,6 +1999,167 @@ async function generateAndSaveAvatarFromTrellisImages(
   return { avatar: finalConfig, trellis, autorig }
 }
 
+function terminalAvatarJobDelay(job: AvatarGenerationJob) {
+  return job.status === 'running' ? AVATAR_GENERATION_ACTIVE_TTL_MS : AVATAR_GENERATION_JOB_TTL_MS
+}
+
+function scheduleAvatarJobCleanup(job: AvatarGenerationJob) {
+  if (job.cleanupTimer) clearTimeout(job.cleanupTimer)
+  job.cleanupTimer = setTimeout(() => {
+    const current = avatarGenerationJobs.get(job.userId)
+    if (current?.id === job.id) avatarGenerationJobs.delete(job.userId)
+  }, terminalAvatarJobDelay(job))
+}
+
+function isExpiredRunningAvatarJob(job: AvatarGenerationJob) {
+  return job.status === 'running' && Date.now() - job.createdAt > AVATAR_GENERATION_ACTIVE_TTL_MS
+}
+
+function avatarJobSnapshot(job: AvatarGenerationJob) {
+  const lastEvent = job.events.at(-1) ?? null
+  return {
+    id: job.id,
+    status: job.status,
+    createdAt: job.createdAt,
+    updatedAt: job.updatedAt,
+    lastEvent,
+    result: lastEvent?.type === 'result' ? lastEvent.result ?? null : null,
+  }
+}
+
+async function publishAvatarJobEvent(job: AvatarGenerationJob, event: AvatarPipelineEvent) {
+  job.events.push(event)
+  job.updatedAt = Date.now()
+
+  for (const subscriber of Array.from(job.subscribers)) {
+    try {
+      await subscriber(event)
+    } catch {
+      job.subscribers.delete(subscriber)
+    }
+  }
+}
+
+function startAvatarGenerationJob(userId: string, body: GenerateAvatarBody) {
+  const existing = avatarGenerationJobs.get(userId)
+  if (existing?.status === 'running' && !isExpiredRunningAvatarJob(existing)) return existing
+  if (existing?.cleanupTimer) clearTimeout(existing.cleanupTimer)
+
+  const job: AvatarGenerationJob = {
+    id: randomUUID(),
+    userId,
+    status: 'running',
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    events: [],
+    subscribers: new Set(),
+    promise: Promise.resolve(),
+    cleanupTimer: null,
+  }
+
+  avatarGenerationJobs.set(userId, job)
+  scheduleAvatarJobCleanup(job)
+  job.promise = runAvatarGenerationJob(job, body)
+  return job
+}
+
+async function runAvatarGenerationJob(job: AvatarGenerationJob, body: GenerateAvatarBody) {
+  const emit: AvatarProgressEmit = (event) => publishAvatarJobEvent(job, event)
+
+  try {
+    await emitAvatarProgress(emit, {
+      type: 'progress',
+      stage: 'source',
+      progress: 5,
+      message: 'Готовим исходное фото',
+      sourceImage: body.fullbodyImage,
+    })
+    await emitAvatarProgress(emit, {
+      type: 'progress',
+      stage: 'fallback',
+      progress: 22,
+      message: 'Быстрый аватар готов',
+      sourceImage: body.fullbodyImage,
+    })
+
+    const prepared = await prepareSingleModelPhoto(body.fullbodyImage, emit)
+    const result = await generateAndSaveAvatarFromTrellisImages(
+      job.userId,
+      body.fallbackConfig,
+      [prepared.image],
+      emit,
+    )
+    await emitAvatarProgress(emit, {
+      type: 'result',
+      stage: 'done',
+      progress: 100,
+      message: 'Аватар готов',
+      result: { ...result, prepared },
+    })
+    job.status = 'succeeded'
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Avatar generation failed'
+    job.status = 'failed'
+    console.error('[Avatar stream] Error:', message)
+    await emitAvatarProgress(emit, {
+      type: 'error',
+      stage: 'failed',
+      progress: 100,
+      message,
+    })
+  } finally {
+    job.updatedAt = Date.now()
+    scheduleAvatarJobCleanup(job)
+  }
+}
+
+async function writeAvatarSseEvent(
+  stream: { writeSSE: (message: { event: string; data: string }) => Promise<void> },
+  event: AvatarPipelineEvent,
+) {
+  await stream.writeSSE({
+    event: event.type,
+    data: JSON.stringify(event),
+  })
+}
+
+async function streamAvatarGenerationJob(
+  stream: {
+    writeSSE: (message: { event: string; data: string }) => Promise<void>
+    onAbort?: (callback: () => void) => void
+  },
+  job: AvatarGenerationJob,
+) {
+  for (const event of job.events) {
+    await writeAvatarSseEvent(stream, event)
+  }
+
+  if (job.status !== 'running') return
+
+  let done = false
+  const subscriber: AvatarGenerationSubscriber = async (event) => {
+    await writeAvatarSseEvent(stream, event)
+    if (event.type === 'result' || event.type === 'error') done = true
+  }
+  job.subscribers.add(subscriber)
+
+  await new Promise<void>((resolve) => {
+    const finish = () => {
+      done = true
+      job.subscribers.delete(subscriber)
+      resolve()
+    }
+
+    stream.onAbort?.(finish)
+    const interval = setInterval(() => {
+      if (done || job.status !== 'running' || !job.subscribers.has(subscriber)) {
+        clearInterval(interval)
+        finish()
+      }
+    }, 500)
+  })
+}
+
 /**
  * POST /avatar/prepare-images
  * Runs KIE GPT Image 2 I2I and returns the generated 4:3 sheet plus the 3 PNG views
@@ -2038,7 +2220,7 @@ avatarRouter.post('/generate-from-images', async (c) => {
 
 /**
  * POST /avatar/generate-stream
- * Same pipeline as /avatar/generate, but streams Kie and Pixal3D progress to the client.
+ * Starts or resumes the user's server-side avatar generation job and streams progress.
  */
 avatarRouter.post('/generate-stream', async (c) => {
   const auth = await getAuthedUser(c.req.header('Authorization'))
@@ -2058,39 +2240,9 @@ avatarRouter.post('/generate-stream', async (c) => {
     return c.json({ error: 'fallbackConfig invalid' }, 400)
   }
 
+  const job = startAvatarGenerationJob(user.id, body)
   return streamSSE(c, async (stream) => {
-    const emit: AvatarProgressEmit = async (event) => {
-      await stream.writeSSE({
-        event: event.type,
-        data: JSON.stringify(event),
-      })
-    }
-
-    try {
-      const prepared = await prepareSingleModelPhoto(body.fullbodyImage, emit)
-      const result = await generateAndSaveAvatarFromTrellisImages(
-        user.id,
-        body.fallbackConfig,
-        [prepared.image],
-        emit,
-      )
-      await emitAvatarProgress(emit, {
-        type: 'result',
-        stage: 'done',
-        progress: 100,
-        message: 'Аватар готов',
-        result: { ...result, prepared },
-      })
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Avatar generation failed'
-      console.error('[Avatar stream] Error:', message)
-      await emitAvatarProgress(emit, {
-        type: 'error',
-        stage: 'failed',
-        progress: 100,
-        message,
-      })
-    }
+    await streamAvatarGenerationJob(stream, job)
   }, async (error, stream) => {
     await stream.writeSSE({
       event: 'error',
@@ -2102,6 +2254,44 @@ avatarRouter.post('/generate-stream', async (c) => {
       } satisfies AvatarPipelineEvent),
     })
   })
+})
+
+avatarRouter.get('/generate-stream', async (c) => {
+  const auth = await getAuthedUser(c.req.header('Authorization'))
+  if (!auth.user) return c.json({ error: auth.error }, 401)
+
+  const job = avatarGenerationJobs.get(auth.user.id)
+  if (!job || isExpiredRunningAvatarJob(job)) {
+    if (job) avatarGenerationJobs.delete(auth.user.id)
+    return c.json({ error: 'No active avatar generation job' }, 404)
+  }
+
+  return streamSSE(c, async (stream) => {
+    await streamAvatarGenerationJob(stream, job)
+  }, async (error, stream) => {
+    await stream.writeSSE({
+      event: 'error',
+      data: JSON.stringify({
+        type: 'error',
+        stage: 'failed',
+        progress: 100,
+        message: error.message,
+      } satisfies AvatarPipelineEvent),
+    })
+  })
+})
+
+avatarRouter.get('/generation-status', async (c) => {
+  const auth = await getAuthedUser(c.req.header('Authorization'))
+  if (!auth.user) return c.json({ error: auth.error }, 401)
+
+  const job = avatarGenerationJobs.get(auth.user.id)
+  if (!job || isExpiredRunningAvatarJob(job)) {
+    if (job) avatarGenerationJobs.delete(auth.user.id)
+    return c.json({ active: false })
+  }
+
+  return c.json({ active: true, job: avatarJobSnapshot(job) })
 })
 
 /**

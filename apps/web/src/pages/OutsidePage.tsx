@@ -12,6 +12,8 @@ import {
 } from '@/avatar/noAiAvatarFactory'
 import {
   generateTrellisAvatarStream,
+  getTrellisAvatarGenerationStatus,
+  resumeTrellisAvatarStream,
   type AvatarPipelineEvent,
   type AvatarPipelineStage,
 } from '@/avatar/trellisPipeline'
@@ -123,9 +125,11 @@ export default function OutsidePage() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const displayName = usePlayerStore((s) => s.displayName)
   const clublesBalance = usePlayerStore((s) => s.clublesBalance)
+  const userId = usePlayerStore((s) => s.userId)
 
   const [playerCount,  setPlayerCount]  = useState(1)
   const [showOutfit,   setShowOutfit]   = useState(false)
+  const [resumeOutfitGeneration, setResumeOutfitGeneration] = useState(false)
 
   const [queueState,    setQueueState]    = useState<'idle'|'waiting'|'cooldown'>('idle')
   const [queuePos,      setQueuePos]      = useState(0)
@@ -1269,6 +1273,27 @@ export default function OutsidePage() {
   const closeOutsideHints = useCallback(() => {
     setShowOutsideHints(false)
   }, [])
+
+  useEffect(() => {
+    if (!userId) return
+    let cancelled = false
+
+    getTrellisAvatarGenerationStatus()
+      .then((status) => {
+        if (cancelled || !status.active || !status.job) return
+        if (status.job.status === 'running' || status.job.status === 'succeeded' || status.job.status === 'failed') {
+          setResumeOutfitGeneration(true)
+          setShowOutfit(true)
+          closeOutsideHints()
+        }
+      })
+      .catch(() => {})
+
+    return () => {
+      cancelled = true
+    }
+  }, [closeOutsideHints, userId])
+
   const closeOutsideIntro = useCallback(() => {
     sessionStorage.setItem(OUTSIDE_INTRO_SEEN_KEY, '1')
     setShowOutsideIntro(false)
@@ -1358,6 +1383,7 @@ export default function OutsidePage() {
     }
     setOutfitCooldownUntil(until)
     localStorage.setItem(OUTFIT_COOLDOWN_STORAGE_KEY, String(until))
+    setResumeOutfitGeneration(false)
     setShowOutfit(false)
   }, [])
 
@@ -1402,7 +1428,7 @@ export default function OutsidePage() {
           {queueLabel()}
         </button>
 
-        <button onClick={() => { if (!outfitOnCooldown) { closeOutsideHints(); setShowOutfit(true) } }} style={{
+        <button onClick={() => { if (!outfitOnCooldown) { closeOutsideHints(); setResumeOutfitGeneration(false); setShowOutfit(true) } }} style={{
           padding:'8px 10px',borderRadius:4,minWidth:112,minHeight:32,
           fontFamily:'monospace',fontSize:9,fontWeight:700,letterSpacing:0.6,
           background: outfitOnCooldown ? 'rgba(20,15,30,0.6)' : 'rgba(30,20,40,0.85)',
@@ -1497,7 +1523,16 @@ export default function OutsidePage() {
         </>
       )}
 
-      {showOutfit && <OutfitModal onClose={()=>setShowOutfit(false)} onDone={handleOutfitDone}/>}
+      {showOutfit && (
+        <OutfitModal
+          resumeActive={resumeOutfitGeneration}
+          onClose={() => {
+            setResumeOutfitGeneration(false)
+            setShowOutfit(false)
+          }}
+          onDone={handleOutfitDone}
+        />
+      )}
 
       <VoiceChat myPlayerId={myPlayerId} environment="outside"/>
       {showOutsideIntro && <OutsideIntroModal onDone={closeOutsideIntro}/>}
@@ -2293,7 +2328,15 @@ function waitForRenderableVideoFrame(video: HTMLVideoElement): Promise<boolean> 
   })
 }
 
-function OutfitModal({ onClose, onDone }: { onClose: () => void; onDone: (until: number) => void }) {
+function OutfitModal({
+  resumeActive = false,
+  onClose,
+  onDone,
+}: {
+  resumeActive?: boolean
+  onClose: () => void
+  onDone: (until: number) => void
+}) {
   const [step,   setStep]   = useState<ModalStep>('intro')
   const [photos, setPhotos] = useState<OutfitPhotos>({ fullbody: null, face: null })
   const [generated, setGenerated] = useState<AvatarConfig | null>(null)
@@ -2308,6 +2351,7 @@ function OutfitModal({ onClose, onDone }: { onClose: () => void; onDone: (until:
   const videoRef  = useRef<HTMLVideoElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const cameraInputRef = useRef<HTMLInputElement>(null)
+  const resumedRef = useRef(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const stopStream = useCallback(() => {
@@ -2320,6 +2364,53 @@ function OutfitModal({ onClose, onDone }: { onClose: () => void; onDone: (until:
     setStream(null)
   }, [stream])
   useEffect(() => () => { stream?.getTracks().forEach(t=>t.stop()) }, [stream])
+
+  useEffect(() => {
+    if (!resumeActive || resumedRef.current) return
+    resumedRef.current = true
+    let cancelled = false
+
+    stopStream()
+    setStep('generating')
+    setError(null)
+    setNotice({ tone: 'pending', message: 'Возвращаемся к текущей генерации' })
+    setGenerationProcess(createInitialOutfitGenerationProcess())
+
+    resumeTrellisAvatarStream((event) => {
+      if (cancelled) return
+      if (event.type === 'result') return
+      setGenerationProcess((current) => processOutfitPipelineEvent(current, event, event.sourceImage))
+      if (event.type !== 'error') setNotice({ tone: 'pending', message: event.message })
+    })
+      .then((result) => {
+        if (cancelled) return
+        setGenerated(result.avatar)
+        setGenerationProcess((current) => ({
+          ...current,
+          stage: 'done',
+          kieImage: result.prepared?.image ?? current.kieImage,
+          progress: 100,
+          message: 'Аватар готов',
+        }))
+        setNotice({
+          tone: result.trellis.status === 'generated' ? 'success' : 'warning',
+          message: result.trellis.status === 'generated'
+            ? `3D-модель готова. ${formatOutfitAutorigMessage(result.autorig ?? result.avatar.autorig ?? null)}`
+            : `Показываем быстрый аватар. ${result.trellis.error ?? '3D-модель не успела собраться.'}`,
+        })
+        setStep('preview')
+      })
+      .catch((generationError) => {
+        if (cancelled) return
+        const message = generationError instanceof Error ? generationError.message : 'Не удалось восстановить генерацию'
+        setError(message)
+        setNotice({ tone: 'warning', message })
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [resumeActive, stopStream])
 
   const startCamera = useCallback(async (facing: OutfitCameraFacing) => {
     stopStream(); setError(null)
@@ -2455,7 +2546,7 @@ function OutfitModal({ onClose, onDone }: { onClose: () => void; onDone: (until:
 
       const result = await generateTrellisAvatarStream(fullbody, fallback.config, (event) => {
         if (event.type === 'result') return
-        setGenerationProcess((current) => processOutfitPipelineEvent(current, event, fullbody))
+        setGenerationProcess((current) => processOutfitPipelineEvent(current, event, event.sourceImage ?? fullbody))
         if (event.type !== 'error') setNotice({ tone: 'pending', message: event.message })
       })
 
@@ -2487,14 +2578,15 @@ function OutfitModal({ onClose, onDone }: { onClose: () => void; onDone: (until:
   }, [photos.face, photos.fullbody])
 
   const handleConfirm = useCallback(async () => {
-    if (!photos.fullbody) return
-    const face = photos.face ?? photos.fullbody
+    if (!generated && !photos.fullbody) return
+    const fullbody = photos.fullbody
+    const face = photos.face ?? fullbody
     setStep('saving')
     setError(null)
     try {
       const { userId } = usePlayerStore.getState()
       if (!userId) throw new Error('Не авторизован')
-      const finalAvatar = generated ?? (await generateNoAiAvatar(photos.fullbody, face)).config
+      const finalAvatar = generated ?? (await generateNoAiAvatar(fullbody!, face!)).config
       const avatarPayload = {
         user_id: userId,
         glb_url: finalAvatar.modelUrl ?? finalAvatar.rpmGlbUrl,
@@ -2526,6 +2618,7 @@ function OutfitModal({ onClose, onDone }: { onClose: () => void; onDone: (until:
   }, [generated, onDone, photos.face, photos.fullbody])
 
   const resetFlow = useCallback(() => {
+    resumedRef.current = false
     stopStream()
     setPhotos({ fullbody: null, face: null })
     setGenerated(null)
@@ -2705,11 +2798,11 @@ function outfitNoticeToneStyle(tone: NonNullable<OutfitNotice>['tone']): CSSProp
 function processOutfitPipelineEvent(
   current: OutfitGenerationProcess,
   event: AvatarPipelineEvent,
-  sourceImage: string,
+  sourceImage?: string,
 ): OutfitGenerationProcess {
   return {
     stage: event.stage,
-    sourceImage,
+    sourceImage: event.sourceImage ?? sourceImage ?? current.sourceImage,
     kieImage: event.prepared?.image ?? current.kieImage,
     progress: Math.max(current.progress, event.progress),
     message: event.message,

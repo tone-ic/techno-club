@@ -47,6 +47,22 @@ type PlayerRole = 'guest' | 'bouncer' | 'guard' | 'dj' | 'bartender' | 'vip' | '
 type ClubRole = 'dj' | 'bartender' | 'guard'
 type StaffInviteRole = 'dj' | 'facecontrol' | 'security' | 'barmen' | 'vip' | 'owner'
 type ClubFloorLevel = 'ground' | 'stairs' | 'vip'
+
+interface PlayerSessionHandoff {
+  room: Player['room']
+  role: PlayerRole
+  x: number
+  z: number
+  floorLevel: ClubFloorLevel
+  rotY: number
+  musicDanceIntensity: number
+  inQueue: boolean
+  queueIndex: number
+  cooldownUntil: number
+  insideClub: boolean
+  djName: string
+}
+
 type ManagementAction =
   | 'warnPlayer'
   | 'escortOutside'
@@ -224,13 +240,34 @@ function broadcast(data: object, except?: string, room?: 'outside' | 'club') {
   })
 }
 
+function createPlayerSessionHandoff(player: Player): PlayerSessionHandoff {
+  return {
+    room: player.room,
+    role: player.role,
+    x: player.x,
+    z: player.z,
+    floorLevel: player.floorLevel,
+    rotY: player.rotY,
+    musicDanceIntensity: player.musicDanceIntensity,
+    inQueue: player.inQueue,
+    queueIndex: player.inQueue ? queue.indexOf(player.id) : -1,
+    cooldownUntil: player.cooldownUntil,
+    insideClub: player.insideClub,
+    djName: player.djName,
+  }
+}
+
 function closeExistingSessions(economyKey: string, nextPlayerId: string) {
   const staleSessions = Array.from(players.values())
     .filter(player => player.id !== nextPlayerId && player.economyKey === economyKey)
 
+  let handoff: PlayerSessionHandoff | null = null
   staleSessions.forEach((player) => {
+    if (!handoff) handoff = createPlayerSessionHandoff(player)
     removePlayerSession(player, 'replaced')
   })
+
+  return handoff
 }
 
 function removePlayerSession(player: Player, reason: 'closed' | 'replaced' = 'closed') {
@@ -1382,7 +1419,7 @@ wss.on('connection', (ws) => {
       applyPersistedPlayerState(economyKey, persistedState)
       const persistedRole = persistedRoleFor(economyKey, requestedUserId)
       const authorizedRole = persistedRole === 'guest' && requestedRole === 'guest' ? requestedRole : persistedRole
-      closeExistingSessions(economyKey, playerId)
+      const handoff = closeExistingSessions(economyKey, playerId)
       const joinRole = roleIsAvailable(authorizedRole, playerId, requestedUserId) ? authorizedRole : 'guest'
       const spawn = room === 'club' && joinRole === 'dj'
         ? DJ_BOOTH_SPAWN
@@ -1408,6 +1445,16 @@ wss.on('connection', (ws) => {
         bartenderTips: 0,
         inQueue: false, queuePos: 0, cooldownUntil: cooldownUntilFor(economyKey), insideClub: room === 'club',
       }
+      if (handoff?.room === room) {
+        player.x = handoff.x
+        player.z = handoff.z
+        player.floorLevel = handoff.floorLevel
+        player.rotY = handoff.rotY
+        player.musicDanceIntensity = handoff.musicDanceIntensity
+        player.cooldownUntil = Math.max(player.cooldownUntil, handoff.cooldownUntil)
+        player.insideClub = handoff.insideClub
+        if (handoff.djName) player.djName = handoff.djName
+      }
       if (room === 'club') {
         const requestedSpawn = requestedClubSpawnFromMessage(msg, player)
         if (requestedSpawn) {
@@ -1417,6 +1464,13 @@ wss.on('connection', (ws) => {
         }
       }
       players.set(playerId, player)
+      let restoredQueue = false
+      if (handoff?.room === 'outside' && room === 'outside' && handoff.inQueue && !player.insideClub) {
+        player.inQueue = true
+        const queueIndex = handoff.queueIndex >= 0 ? Math.min(handoff.queueIndex, queue.length) : queue.length
+        queue.splice(queueIndex, 0, playerId)
+        restoredQueue = true
+      }
       if (CLUB_ROLE_SLOTS.includes(player.role as ClubRole)) roleSlots[player.role as ClubRole] = playerId
       if (persistedVipAccess.get(player.economyKey) || player.role === 'vip' || player.role === 'owner' || player.role === 'admin') vipGuests.add(playerId)
       if (player.role === 'dj') ensureDjScheduleItem(player, true)
@@ -1469,6 +1523,10 @@ wss.on('connection', (ws) => {
 
       if (canFaceControl(player))
         ws.send(JSON.stringify({ type: 'queueUpdate', queue: queueSnapshot() }))
+      if (restoredQueue) {
+        ws.send(JSON.stringify({ type:'queueJoined', pos:queue.indexOf(playerId) + 1 }))
+        broadcast({ type:'queueUpdate', queue:queueSnapshot() })
+      }
       sendGameplayState(player)
       sendDjSchedule(player)
       if (player.role === 'dj') broadcastDjSchedule()
