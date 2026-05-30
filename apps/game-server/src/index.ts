@@ -15,6 +15,7 @@ interface Player {
   id: string
   userId: string
   economyKey: string
+  accountKey: string
   ws: WebSocket
   room: 'outside' | 'club'
   displayName: string
@@ -149,8 +150,10 @@ const SERVER_PROTOCOL_VERSION = 'doorclub-ws/2026-05-26.server-music-source-v1'
 const PORT = Number(process.env.GAME_SERVER_PORT || process.env.PORT || 2567)
 const COOLDOWN_MS = 10 * 60 * 1000
 const PLAYER_MIN_DISTANCE = 0.9
-const PLAYER_COLLISION_PADDING = 0.015
-const PLAYER_COLLISION_ITERATIONS = 3
+const PLAYER_COLLISION_PADDING = 0.04
+const PLAYER_COLLISION_ITERATIONS = 5
+const OUTSIDE_WALK_BOUNDS = { minX: -8, maxX: 8, minZ: -10, maxZ: 10 } as const
+const CLUB_WALK_BOUNDS = { minX: -15.2, maxX: 15.2, minZ: -14.7, maxZ: 9.8 } as const
 const VALID_ROLES = new Set<PlayerRole>(['guest', 'bouncer', 'guard', 'dj', 'bartender', 'vip', 'owner', 'admin'])
 const CLUB_ROLE_SLOTS: ClubRole[] = ['dj', 'bartender', 'guard']
 const roleSlots: Record<ClubRole, string | null> = { dj: null, bartender: null, guard: null }
@@ -257,9 +260,9 @@ function createPlayerSessionHandoff(player: Player): PlayerSessionHandoff {
   }
 }
 
-function closeExistingSessions(economyKey: string, nextPlayerId: string) {
+function closeExistingSessions(accountKey: string, nextPlayerId: string) {
   const staleSessions = Array.from(players.values())
-    .filter(player => player.id !== nextPlayerId && player.economyKey === economyKey)
+    .filter(player => player.id !== nextPlayerId && player.accountKey === accountKey)
 
   let handoff: PlayerSessionHandoff | null = null
   staleSessions.forEach((player) => {
@@ -331,6 +334,29 @@ function removePlayerSession(player: Player, reason: 'closed' | 'replaced' = 'cl
 
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value))
+}
+
+function normalizeAccountEmail(value: unknown) {
+  const email = typeof value === 'string' ? value.trim().toLowerCase() : ''
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : ''
+}
+
+function accountKeyFor(email: string, userId: string, playerId: string) {
+  if (email) return `email:${email}`
+  if (userId) return `user:${userId}`
+  return `session:${playerId}`
+}
+
+function walkBoundsForRoom(room: Player['room']) {
+  return room === 'club' ? CLUB_WALK_BOUNDS : OUTSIDE_WALK_BOUNDS
+}
+
+function clampWalkPosition(room: Player['room'], x: number, z: number) {
+  const bounds = walkBoundsForRoom(room)
+  return {
+    x: clamp(x, bounds.minX, bounds.maxX),
+    z: clamp(z, bounds.minZ, bounds.maxZ),
+  }
 }
 
 function musicDir() {
@@ -1356,6 +1382,29 @@ function queueSnapshot() {
   }).filter(Boolean)
 }
 
+function removeQueuedPlayersForAccount(player: Player) {
+  let removed = false
+  for (let i = queue.length - 1; i >= 0; i -= 1) {
+    const queuedPlayerId = queue[i]
+    if (queuedPlayerId === player.id) continue
+
+    const queuedPlayer = players.get(queuedPlayerId)
+    if (!queuedPlayer) {
+      queue.splice(i, 1)
+      removed = true
+      continue
+    }
+    if (queuedPlayer.accountKey !== player.accountKey) continue
+
+    queue.splice(i, 1)
+    queuedPlayer.inQueue = false
+    queuedPlayer.queuePos = 0
+    sendTo(queuedPlayer.id, { type: 'queueLeft' })
+    removed = true
+  }
+  return removed
+}
+
 function findSpawnPos(room: 'outside' | 'club'): { x: number; z: number } {
   const slots = room === 'club'
     ? [
@@ -1388,7 +1437,7 @@ function requestedClubSpawnFromMessage(msg: any, player: Player): { x: number; z
   const x = Number(msg.lastX)
   const z = Number(msg.lastZ)
   if (!Number.isFinite(x) || !Number.isFinite(z)) return null
-  if (x < -15.2 || x > 15.2 || z < -14.7 || z > 9.8) return null
+  if (x < CLUB_WALK_BOUNDS.minX || x > CLUB_WALK_BOUNDS.maxX || z < CLUB_WALK_BOUNDS.minZ || z > CLUB_WALK_BOUNDS.maxZ) return null
 
   const requestedFloorLevel = isClubFloorLevel(msg.lastFloorLevel) ? msg.lastFloorLevel : 'ground'
   const floorLevel = resolveClubFloorLevel(requestedFloorLevel, x, z)
@@ -1414,12 +1463,14 @@ wss.on('connection', (ws) => {
       const room: 'outside' | 'club' = msg.room === 'club' ? 'club' : 'outside'
       const requestedRole = VALID_ROLES.has(msg.role) ? msg.role as PlayerRole : 'guest'
       const requestedUserId = typeof msg.userId === 'string' ? msg.userId : ''
+      const requestedEmail = normalizeAccountEmail(msg.email)
       const economyKey = requestedUserId || playerId
+      const accountKey = accountKeyFor(requestedEmail, requestedUserId, playerId)
       const persistedState = requestedUserId ? await loadPlayerPersistence(economyKey) : null
       applyPersistedPlayerState(economyKey, persistedState)
       const persistedRole = persistedRoleFor(economyKey, requestedUserId)
       const authorizedRole = persistedRole === 'guest' && requestedRole === 'guest' ? requestedRole : persistedRole
-      const handoff = closeExistingSessions(economyKey, playerId)
+      const handoff = closeExistingSessions(accountKey, playerId)
       const joinRole = roleIsAvailable(authorizedRole, playerId, requestedUserId) ? authorizedRole : 'guest'
       const spawn = room === 'club' && joinRole === 'dj'
         ? DJ_BOOTH_SPAWN
@@ -1427,7 +1478,7 @@ wss.on('connection', (ws) => {
           ? BAR_WORK_SPAWN
           : findSpawnPos(room)
       const player: Player = {
-        id: playerId, userId: requestedUserId, economyKey, ws, room,
+        id: playerId, userId: requestedUserId, economyKey, accountKey, ws, room,
         displayName:    msg.displayName    || 'Аноним',
         topColor:       msg.topColor       || '#222244',
         bottomColor:    msg.bottomColor    || '#111133',
@@ -1466,6 +1517,7 @@ wss.on('connection', (ws) => {
       players.set(playerId, player)
       let restoredQueue = false
       if (handoff?.room === 'outside' && room === 'outside' && handoff.inQueue && !player.insideClub) {
+        removeQueuedPlayersForAccount(player)
         player.inQueue = true
         const queueIndex = handoff.queueIndex >= 0 ? Math.min(handoff.queueIndex, queue.length) : queue.length
         queue.splice(queueIndex, 0, playerId)
@@ -1596,12 +1648,19 @@ wss.on('connection', (ws) => {
       const nextRotY = Number(msg.rotY)
       if (!Number.isFinite(nextX) || !Number.isFinite(nextZ) || !Number.isFinite(nextRotY)) return
 
-      const nextFloorLevel = p.room === 'club' ? resolveClubFloorLevel(p.floorLevel, nextX, nextZ) : 'ground'
-      const blockedMove = p.room === 'club' && isClubPositionBlockedForPlayer(p, nextX, nextZ, nextFloorLevel)
-      const guardedX = blockedMove ? p.x : nextX
-      const guardedZ = blockedMove ? p.z : nextZ
+      const boundedTarget = clampWalkPosition(p.room, nextX, nextZ)
+      const nextFloorLevel = p.room === 'club' ? resolveClubFloorLevel(p.floorLevel, boundedTarget.x, boundedTarget.z) : 'ground'
+      const blockedMove = p.room === 'club' && isClubPositionBlockedForPlayer(p, boundedTarget.x, boundedTarget.z, nextFloorLevel)
+      const guardedX = blockedMove ? p.x : boundedTarget.x
+      const guardedZ = blockedMove ? p.z : boundedTarget.z
       const guardedFloorLevel = blockedMove ? p.floorLevel : nextFloorLevel
       const resolved = resolvePlayerCollision(playerId, p.room, p.x, p.z, guardedX, guardedZ, guardedFloorLevel)
+      const boundedResolved = clampWalkPosition(p.room, resolved.x, resolved.z)
+      if (boundedResolved.x !== resolved.x || boundedResolved.z !== resolved.z) {
+        resolved.x = boundedResolved.x
+        resolved.z = boundedResolved.z
+        resolved.adjusted = true
+      }
       const resolvedFloorLevel = p.room === 'club' ? resolveClubFloorLevel(p.floorLevel, resolved.x, resolved.z) : 'ground'
       if (p.room === 'club' && isClubPositionBlockedForPlayer(p, resolved.x, resolved.z, resolvedFloorLevel)) {
         resolved.x = p.x
@@ -1631,11 +1690,13 @@ wss.on('connection', (ws) => {
         return
       }
       if (p.inQueue || p.insideClub) return
+      const removedDuplicateQueueEntries = removeQueuedPlayersForAccount(p)
       p.inQueue = true
       queue.push(playerId)
       console.log(`  [Q] ${p.displayName} joined queue. Size: ${queue.length}`)
       ws.send(JSON.stringify({ type:'queueJoined', pos:queue.length }))
       broadcast({ type:'queueUpdate', queue:queueSnapshot() })
+      if (removedDuplicateQueueEntries) sendGameplayState(p)
 
     } else if (msg.type === 'leaveQueue' && playerId) {
       const p = players.get(playerId); if (!p || !p.inQueue) return

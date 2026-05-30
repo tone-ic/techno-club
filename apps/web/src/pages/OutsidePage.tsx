@@ -3,7 +3,7 @@ import type { CSSProperties, FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { MUSIC_BPM_EVENT, MUSIC_OUTPUT_EVENT } from '@/components/MusicPlayer'
 import AdminDebugOverlay from '@/components/AdminDebugOverlay'
-import VoiceChat, { PROXIMITY_VOICE_POSITIONS_EVENT, VOICE_LEVELS_EVENT, VOICE_TALKING_EVENT } from '@/components/VoiceChat'
+import VoiceChat, { MOVEMENT_INPUT_RESET_EVENT, PROXIMITY_VOICE_POSITIONS_EVENT, VOICE_LEVELS_EVENT, VOICE_TALKING_EVENT } from '@/components/VoiceChat'
 import {
   compressCameraPhoto,
   generateNoAiAvatar,
@@ -38,6 +38,7 @@ const OUTSIDE_GROUND_WIDTH = OUTSIDE_WALK_BOUNDS.maxX - OUTSIDE_WALK_BOUNDS.minX
 const OUTSIDE_GROUND_DEPTH = OUTSIDE_WALK_BOUNDS.maxZ - OUTSIDE_WALK_BOUNDS.minZ
 const OUTSIDE_GROUND_CENTER_Z = (OUTSIDE_WALK_BOUNDS.minZ + OUTSIDE_WALK_BOUNDS.maxZ) / 2
 const OUTSIDE_BOUNDARY_THICKNESS = 0.8
+const OUTSIDE_CAMERA_BOUNDS = { minX: -7.65, maxX: 7.65, minZ: -9.75, maxZ: 9.75, minY: 0.55, maxY: 8.8 } as const
 type StaffInviteRole = 'dj' | 'facecontrol' | 'security' | 'barmen' | 'vip' | 'owner'
 type ManagementTab = 'security' | 'owner' | 'admin'
 const MANAGEMENT_PANEL_OPEN_KEY = 'doorclub-management-panel-open'
@@ -799,11 +800,11 @@ export default function OutsidePage() {
     }
     const cam = {yaw:0,pitch:0.25,dist:7}
     const setCameraDistance = (dist: number) => {
-      cam.dist = Math.max(3.2, Math.min(12, dist))
+      cam.dist = Math.max(3.2, Math.min(9.6, dist))
     }
     let rmb=false,lmx=0,lmy=0
     canvas.addEventListener('mousedown',e=>{if(e.button===2){rmb=true;lmx=e.clientX;lmy=e.clientY}})
-    canvas.addEventListener('mousemove',e=>{if(!rmb)return;cam.yaw-=(e.clientX-lmx)*0.005;cam.pitch=Math.max(-0.35,Math.min(1.45,cam.pitch-(e.clientY-lmy)*0.004));lmx=e.clientX;lmy=e.clientY})
+    canvas.addEventListener('mousemove',e=>{if(!rmb)return;cam.yaw-=(e.clientX-lmx)*0.005;cam.pitch=Math.max(-0.08,Math.min(1.18,cam.pitch-(e.clientY-lmy)*0.004));lmx=e.clientX;lmy=e.clientY})
     canvas.addEventListener('mouseup',()=>{rmb=false})
     canvas.addEventListener('wheel',e=>{e.preventDefault();setCameraDistance(cam.dist+e.deltaY*0.006)},{passive:false})
     canvas.addEventListener('contextmenu',e=>e.preventDefault())
@@ -819,9 +820,21 @@ export default function OutsidePage() {
     },{passive:true})
     canvas.addEventListener('touchmove',e=>{
       if(e.touches.length>=2&&pinch){e.preventDefault();setCameraDistance(pinch.camDist*(pinch.distance/Math.max(1,touchDistance(e.touches))));return}
-      if(!tl)return;for(const t of Array.from(e.changedTouches))if(t.identifier===tl.id){cam.yaw-=(t.clientX-tl.x)*0.005;cam.pitch=Math.max(-0.35,Math.min(1.45,cam.pitch-(t.clientY-tl.y)*0.004));tl.x=t.clientX;tl.y=t.clientY}
+      if(!tl)return;for(const t of Array.from(e.changedTouches))if(t.identifier===tl.id){cam.yaw-=(t.clientX-tl.x)*0.005;cam.pitch=Math.max(-0.08,Math.min(1.18,cam.pitch-(t.clientY-tl.y)*0.004));tl.x=t.clientX;tl.y=t.clientY}
     },{passive:false})
     canvas.addEventListener('touchend',e=>{if(e.touches.length<2)pinch=null;if(!tl)return;for(const t of Array.from(e.changedTouches))if(tl&&t.identifier===tl.id)tl=null},{passive:true})
+    const resetTransientInput = () => {
+      clearMovementInput()
+      rmb = false
+      tl = null
+      pinch = null
+    }
+    const resetTransientInputOnHidden = () => {
+      if (document.visibilityState !== 'visible') resetTransientInput()
+    }
+    window.addEventListener(MOVEMENT_INPUT_RESET_EVENT, resetTransientInput)
+    window.addEventListener('blur', resetTransientInput)
+    document.addEventListener('visibilitychange', resetTransientInputOnHidden)
 
     const pos = new THREE.Vector3(0,0,6)
     const serverCorrection = { active: false, x: pos.x, z: pos.z }
@@ -1082,7 +1095,12 @@ export default function OutsidePage() {
       const cx=pos.x+cam.dist*Math.sin(cam.yaw)*Math.cos(cam.pitch)
       const cy=1.8+cam.dist*Math.sin(cam.pitch)
       const cz=pos.z+cam.dist*Math.cos(cam.yaw)*Math.cos(cam.pitch)
-      camera.position.lerp(new THREE.Vector3(cx,cy,cz),0.12)
+      const boundedCamera = new THREE.Vector3(
+        Math.max(OUTSIDE_CAMERA_BOUNDS.minX, Math.min(OUTSIDE_CAMERA_BOUNDS.maxX, cx)),
+        Math.max(OUTSIDE_CAMERA_BOUNDS.minY, Math.min(OUTSIDE_CAMERA_BOUNDS.maxY, cy)),
+        Math.max(OUTSIDE_CAMERA_BOUNDS.minZ, Math.min(OUTSIDE_CAMERA_BOUNDS.maxZ, cz)),
+      )
+      camera.position.lerp(boundedCamera,0.12)
       camera.lookAt(pos.x,1.4,pos.z)
 
       sendT+=dt; if(sendT>0.05){sendT=0;gameClient.move(pos.x,pos.z,lastMoveRotY,moving,musicDanceIntensity(1))}
@@ -1140,7 +1158,17 @@ export default function OutsidePage() {
 
     const onResize = () => { camera.aspect=window.innerWidth/window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth,window.innerHeight) }
     window.addEventListener('resize',onResize)
-    return () => { cancelAnimationFrame(animId); window.removeEventListener('keydown',onKD); window.removeEventListener('keyup',onKU); window.removeEventListener('resize',onResize); voiceMouthTexture.dispose(); renderer.dispose() }
+    return () => {
+      cancelAnimationFrame(animId)
+      window.removeEventListener('keydown',onKD)
+      window.removeEventListener('keyup',onKU)
+      window.removeEventListener('resize',onResize)
+      window.removeEventListener(MOVEMENT_INPUT_RESET_EVENT, resetTransientInput)
+      window.removeEventListener('blur', resetTransientInput)
+      document.removeEventListener('visibilitychange', resetTransientInputOnHidden)
+      voiceMouthTexture.dispose()
+      renderer.dispose()
+    }
   }, [])
 
   // ── MULTIPLAYER ────────────────────────────────────────────────────────────
@@ -1232,6 +1260,7 @@ export default function OutsidePage() {
       gameClient.connect(getGameServerUrl(), {
         room:           'outside',
         userId:         store.userId ?? '',
+        email:          store.accountEmail ?? '',
         displayName:    store.displayName,
         role:           store.role,
         topColor:       config?.topColor       ?? '#222244',

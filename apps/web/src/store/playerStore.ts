@@ -5,6 +5,7 @@ import type { AvatarConfig, UserRole, PlayerStatus } from '@shared/types'
 interface PlayerStore {
   // Auth
   userId: string | null
+  accountEmail: string | null
   displayName: string
   djName: string
 
@@ -28,6 +29,7 @@ interface PlayerStore {
 
   // Actions
   setUserId: (id: string | null) => void
+  setAccountEmail: (email: string | null) => void
   setDisplayName: (name: string) => void
   setDjName: (name: string) => void
   setAvatarConfig: (config: AvatarConfig) => void
@@ -47,6 +49,7 @@ export const usePlayerStore = create<PlayerStore>()(
   persist(
     (set) => ({
       userId: null,
+      accountEmail: null,
       displayName: 'Аноним',
       djName: '',
       avatarConfig: null,
@@ -61,6 +64,7 @@ export const usePlayerStore = create<PlayerStore>()(
       lastPosition: null,
 
       setUserId: (id) => set({ userId: id }),
+      setAccountEmail: (email) => set({ accountEmail: email ? email.trim().toLowerCase() : null }),
       setDisplayName: (name) => set({ displayName: name }),
       setDjName: (name) => set({ djName: name }),
       setAvatarConfig: (config) => set({ avatarConfig: config }),
@@ -78,6 +82,7 @@ export const usePlayerStore = create<PlayerStore>()(
       reset: () =>
         set({
           userId: null,
+          accountEmail: null,
           displayName: 'Аноним',
           djName: '',
           avatarConfig: null,
@@ -97,6 +102,7 @@ export const usePlayerStore = create<PlayerStore>()(
       // Не сохранять talking/muted — сбрасывать при перезагрузке
       partialize: (state) => ({
   userId: state.userId,
+  accountEmail: state.accountEmail,
   displayName: state.displayName,
   djName: state.djName,
   avatarConfig: state.avatarConfig ? {

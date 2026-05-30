@@ -61,7 +61,7 @@ function RequireRole({ allowed, children }: { allowed: string[]; children: React
 }
 
 export default function App() {
-  const { userId, setUserId, setDisplayName, setRole } = usePlayerStore()
+  const { userId, setUserId, setAccountEmail, setDisplayName, setRole } = usePlayerStore()
   const [authReady, setAuthReady] = useState(false)
   const [onboarding, setOnboarding] = useState<OnboardingState>({
     ready: false,
@@ -107,6 +107,7 @@ export default function App() {
     supabase.auth.getSession().then(async ({ data: { session } }) => {
       if (session?.user && isEmailAuthorizedUser(session.user)) {
         setUserId(session.user.id)
+        setAccountEmail(session.user.email ?? null)
         await loadProfile(session.user.id)
       } else {
         if (session?.user) await supabase.auth.signOut()
@@ -119,6 +120,7 @@ export default function App() {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       if (session?.user && isEmailAuthorizedUser(session.user)) {
         setUserId(session.user.id)
+        setAccountEmail(session.user.email ?? null)
         void loadProfile(session.user.id)
         return
       }
@@ -132,7 +134,7 @@ export default function App() {
       subscription.unsubscribe()
       window.removeEventListener('profile-onboarding-completed', onOnboardingCompleted)
     }
-  }, [setUserId, setDisplayName, setRole])
+  }, [setUserId, setAccountEmail, setDisplayName, setRole])
 
   if (!authReady) return <LoadingScreen />
 

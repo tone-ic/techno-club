@@ -40,6 +40,7 @@ const VOICE_CAPTURE_AUDIO_STATE_EVENT = 'voice-capture-audio-state'
 export const PROXIMITY_VOICE_POSITIONS_EVENT = 'proximity-voice-positions'
 export const VOICE_TALKING_EVENT = 'voice-talking'
 export const VOICE_LEVELS_EVENT = 'voice-levels'
+export const MOVEMENT_INPUT_RESET_EVENT = 'doorclub:movement-input-reset'
 const MIC_CAPTURE_CONSTRAINTS: MediaTrackConstraints & { voiceIsolation?: boolean } = {
   echoCancellation: true,
   noiseSuppression: true,
@@ -251,6 +252,12 @@ function dispatchVoiceCaptureAudioState(active: boolean) {
   else preferPlaybackAudioSession()
   window.dispatchEvent(new CustomEvent(VOICE_CAPTURE_AUDIO_STATE_EVENT, {
     detail: { active, updatedAt: Date.now() },
+  }))
+}
+
+function resetMovementInputForVoiceUi() {
+  window.dispatchEvent(new CustomEvent(MOVEMENT_INPUT_RESET_EVENT, {
+    detail: { source: 'voice-ui', updatedAt: Date.now() },
   }))
 }
 
@@ -614,6 +621,7 @@ export default function VoiceChat({
   }
 
   const toggleIncomingPlayback = () => {
+    resetMovementInputForVoiceUi()
     setIncomingPlaybackEnabled(!incomingVoicesEnabledRef.current)
   }
 
@@ -820,6 +828,7 @@ export default function VoiceChat({
   }
 
   const toggleAutoVoice = () => {
+    resetMovementInputForVoiceUi()
     if (voiceModeRef.current === 'auto') {
       stopAutoVoice()
     } else {
@@ -832,6 +841,7 @@ export default function VoiceChat({
   }
 
   const confirmMicNotice = () => {
+    resetMovementInputForVoiceUi()
     const action = pendingMicAction
     setMicNoticeSeen()
     setMicNoticeSeenState(true)
@@ -922,6 +932,8 @@ export default function VoiceChat({
 
   const handlePointerDown = (event: PointerEvent<HTMLButtonElement>) => {
     event.preventDefault()
+    event.stopPropagation()
+    resetMovementInputForVoiceUi()
     if (voiceModeRef.current === 'auto') return
     if (!micNoticeSeen) {
       pressedRef.current = false
@@ -935,6 +947,8 @@ export default function VoiceChat({
 
   const handlePointerUp = (event: PointerEvent<HTMLButtonElement>) => {
     event.preventDefault()
+    event.stopPropagation()
+    resetMovementInputForVoiceUi()
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId)
     }
@@ -972,7 +986,10 @@ export default function VoiceChat({
         <button
           type="button"
           disabled={!myPlayerId || busy}
-          onClick={toggleAutoVoice}
+          onClick={(event) => {
+            event.stopPropagation()
+            toggleAutoVoice()
+          }}
           style={autoButtonStyle(autoActive, active, busy, !myPlayerId)}
           aria-label={autoActive ? 'Выключить авто-микрофон' : 'Включить авто-микрофон'}
           title={autoActive ? 'Выключить авто-микрофон' : 'Включить авто-микрофон'}
@@ -981,7 +998,10 @@ export default function VoiceChat({
         </button>
         <button
           type="button"
-          onClick={toggleIncomingPlayback}
+          onClick={(event) => {
+            event.stopPropagation()
+            toggleIncomingPlayback()
+          }}
           style={muteButtonStyle(incomingVoicesEnabled)}
           aria-label={incomingVoicesEnabled ? 'Выключить голоса игроков' : 'Включить голоса игроков'}
           title={incomingVoicesEnabled ? 'Выключить голоса игроков' : 'Включить голоса игроков'}
@@ -1000,10 +1020,17 @@ export default function VoiceChat({
             <div style={micNoticeTextStyle}>
               Настоятельно рекомендуем использовать наушники: так музыка не попадет обратно в микрофон, а голоса игроков будут чище.
             </div>
-            <button type="button" style={micNoticePrimaryStyle} onClick={confirmMicNotice}>
+            <button type="button" style={micNoticePrimaryStyle} onClick={(event) => {
+              event.stopPropagation()
+              confirmMicNotice()
+            }}>
               Включить микрофон
             </button>
-            <button type="button" style={micNoticeGhostStyle} onClick={() => setPendingMicAction(null)}>
+            <button type="button" style={micNoticeGhostStyle} onClick={(event) => {
+              event.stopPropagation()
+              resetMovementInputForVoiceUi()
+              setPendingMicAction(null)
+            }}>
               Не сейчас
             </button>
           </div>

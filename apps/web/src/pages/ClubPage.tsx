@@ -5,7 +5,7 @@ import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import AdminDebugOverlay from '@/components/AdminDebugOverlay'
 import { MUSIC_BPM_EVENT, MUSIC_OUTPUT_EVENT } from '@/components/MusicPlayer'
-import VoiceChat, { PROXIMITY_VOICE_POSITIONS_EVENT, VOICE_LEVELS_EVENT, VOICE_TALKING_EVENT } from '@/components/VoiceChat'
+import VoiceChat, { MOVEMENT_INPUT_RESET_EVENT, PROXIMITY_VOICE_POSITIONS_EVENT, VOICE_LEVELS_EVENT, VOICE_TALKING_EVENT } from '@/components/VoiceChat'
 import { usePlayerStore } from '@/store/playerStore'
 import { loadGeneratedAvatarRig, type GeneratedAvatarRig, type GeneratedDanceId } from '@/utils/generatedAvatarRig'
 import { applyAvatarFacingRotation, getAvatarMovementRotationY } from '@/utils/avatarFacing'
@@ -22,6 +22,8 @@ type NearbyPlayer = { id: string; displayName: string }
 type ManagementTab = 'security' | 'owner' | 'admin'
 
 const CLUB_NAME = 'DOOR//CLUB'
+const CLUB_WALK_BOUNDS = { minX: -15.2, maxX: 15.2, minZ: -14.7, maxZ: 9.8 } as const
+const CLUB_CAMERA_BOUNDS = { minX: -14.85, maxX: 14.85, minZ: -14.35, maxZ: 9.45, minY: 0.55, maxY: 7.85 } as const
 const ZONE_LABELS: Record<ClubZone, string> = {
   floor: 'ТАНЦПОЛ',
   dj: 'DJ BOOTH',
@@ -1201,7 +1203,7 @@ export default function ClubPage() {
 
     const cam = { yaw: 0, pitch: 0.22, dist: 7.2 }
     const setCameraDistance = (dist: number) => {
-      cam.dist = Math.max(3.2, Math.min(12, dist))
+      cam.dist = Math.max(3.2, Math.min(9.6, dist))
     }
     let rightMouse = false
     let lastMouseX = 0
@@ -1216,7 +1218,7 @@ export default function ClubPage() {
     const onMouseMove = (e: MouseEvent) => {
       if (!rightMouse) return
       cam.yaw -= (e.clientX - lastMouseX) * 0.005
-      cam.pitch = Math.max(-0.25, Math.min(1.2, cam.pitch - (e.clientY - lastMouseY) * 0.004))
+      cam.pitch = Math.max(-0.08, Math.min(1.1, cam.pitch - (e.clientY - lastMouseY) * 0.004))
       lastMouseX = e.clientX
       lastMouseY = e.clientY
     }
@@ -1260,7 +1262,7 @@ export default function ClubPage() {
       for (const t of Array.from(e.changedTouches)) {
         if (t.identifier === look.id) {
           cam.yaw -= (t.clientX - look.x) * 0.005
-          cam.pitch = Math.max(-0.25, Math.min(1.2, cam.pitch - (t.clientY - look.y) * 0.004))
+          cam.pitch = Math.max(-0.08, Math.min(1.1, cam.pitch - (t.clientY - look.y) * 0.004))
           look.x = t.clientX
           look.y = t.clientY
         }
@@ -1277,6 +1279,18 @@ export default function ClubPage() {
     canvas.addEventListener('touchstart', onTouchStart, { passive: true })
     canvas.addEventListener('touchmove', onTouchMove, { passive: false })
     canvas.addEventListener('touchend', onTouchEnd, { passive: true })
+    const resetTransientInput = () => {
+      clearMovementInput()
+      rightMouse = false
+      touchLook = null
+      pinch = null
+    }
+    const resetTransientInputOnHidden = () => {
+      if (document.visibilityState !== 'visible') resetTransientInput()
+    }
+    window.addEventListener(MOVEMENT_INPUT_RESET_EVENT, resetTransientInput)
+    window.addEventListener('blur', resetTransientInput)
+    document.addEventListener('visibilitychange', resetTransientInputOnHidden)
 
     const storedClubPosition = readStoredClubPosition()
     const pos = new THREE.Vector3(storedClubPosition?.x ?? 0, 0, storedClubPosition?.z ?? 4.8)
@@ -1593,8 +1607,8 @@ export default function ClubPage() {
           const prevZ = pos.z
           let nextX = pos.x + (dx / len) * strideSpeed * dt
           let nextZ = pos.z + (dz / len) * strideSpeed * dt
-          nextX = Math.max(-15.2, Math.min(15.2, nextX))
-          nextZ = Math.max(-14.7, Math.min(9.8, nextZ))
+          nextX = Math.max(CLUB_WALK_BOUNDS.minX, Math.min(CLUB_WALK_BOUNDS.maxX, nextX))
+          nextZ = Math.max(CLUB_WALK_BOUNDS.minZ, Math.min(CLUB_WALK_BOUNDS.maxZ, nextZ))
           let nextFloorLevel = resolveClubFloorLevel(selfFloorLevel, nextX, nextZ)
           let blocked = hitsSolid(nextX, nextZ, nextFloorLevel)
 
@@ -1632,8 +1646,8 @@ export default function ClubPage() {
                   nextX += separateX * overlap
                   nextZ += separateZ * overlap
                 }
-                nextX = Math.max(-15.2, Math.min(15.2, nextX))
-                nextZ = Math.max(-14.7, Math.min(9.8, nextZ))
+                nextX = Math.max(CLUB_WALK_BOUNDS.minX, Math.min(CLUB_WALK_BOUNDS.maxX, nextX))
+                nextZ = Math.max(CLUB_WALK_BOUNDS.minZ, Math.min(CLUB_WALK_BOUNDS.maxZ, nextZ))
                 nextFloorLevel = resolveClubFloorLevel(selfFloorLevel, nextX, nextZ)
                 if (hitsSolid(nextX, nextZ, nextFloorLevel)) blocked = true
               }
@@ -1948,7 +1962,11 @@ export default function ClubPage() {
       const cx = pos.x + cam.dist * Math.sin(cam.yaw) * Math.cos(cam.pitch)
       const cy = floorY + 1.75 + cam.dist * Math.sin(cam.pitch)
       const cz = pos.z + cam.dist * Math.cos(cam.yaw) * Math.cos(cam.pitch)
-      camera.position.set(cx, cy, cz)
+      camera.position.set(
+        Math.max(CLUB_CAMERA_BOUNDS.minX, Math.min(CLUB_CAMERA_BOUNDS.maxX, cx)),
+        Math.max(Math.max(CLUB_CAMERA_BOUNDS.minY, floorY + 0.55), Math.min(CLUB_CAMERA_BOUNDS.maxY, cy)),
+        Math.max(CLUB_CAMERA_BOUNDS.minZ, Math.min(CLUB_CAMERA_BOUNDS.maxZ, cz)),
+      )
       camera.lookAt(pos.x, floorY + 1.25, pos.z)
 
       renderer.render(scene, camera)
@@ -2781,6 +2799,9 @@ export default function ClubPage() {
       window.removeEventListener('keyup', onKeyUp)
       window.removeEventListener('resize', onResize)
       window.visualViewport?.removeEventListener('resize', onResize)
+      window.removeEventListener(MOVEMENT_INPUT_RESET_EVENT, resetTransientInput)
+      window.removeEventListener('blur', resetTransientInput)
+      document.removeEventListener('visibilitychange', resetTransientInputOnHidden)
       canvas.removeEventListener('mousedown', onMouseDown)
       canvas.removeEventListener('mousemove', onMouseMove)
       canvas.removeEventListener('mouseup', onMouseUp)
@@ -2891,6 +2912,7 @@ export default function ClubPage() {
       gameClient.connect(getGameServerUrl(), {
         room:           'club',
         userId:         store.userId ?? '',
+        email:          store.accountEmail ?? '',
         displayName:    store.displayName,
         topColor:       config?.topColor       ?? '#222244',
         bottomColor:    config?.bottomColor    ?? '#111133',
