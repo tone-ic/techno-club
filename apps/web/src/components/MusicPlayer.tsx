@@ -1123,13 +1123,11 @@ function lockscreenElementVolume(element: HTMLAudioElement | null, processedStre
 }
 
 function shouldUseNativeLockscreenAudio() {
-  return true
+  return false
 }
 
-function canUseLockscreenAudioNow(environment = _environment) {
-  if (!_audioRouteActive) return false
-  if (environment === 'outside' && IS_MOBILE_AUDIO) return false
-  return environment === 'club' || environment === 'outside'
+function canUseLockscreenAudioNow() {
+  return false
 }
 
 function shouldKeepNativeLockscreenAudio() {
@@ -1208,7 +1206,7 @@ function hasLockscreenMusicAccess() {
 }
 
 function shouldSuspendHiddenAudioWithoutAccess() {
-  return isDocumentHidden() && IS_MOBILE_AUDIO && !canUseLockscreenAudioNow()
+  return isDocumentHidden()
 }
 
 function getTrackTitle(trackIdx = _currentTrackIdx) {
