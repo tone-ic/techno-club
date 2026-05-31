@@ -394,17 +394,40 @@ export default function OutsidePage() {
 
     const wallMat  = lmat(0x15130f)
     const metalMat = lmat(0x2f302b, 0x0e0c08, 0.22)
-    const boundaryWallMat = lmat(0x211c14, 0x100b07, 0.28)
-    const boundaryTrimMat = lmat(0x6c532f, 0x33200b, 0.44)
+    const railPostMat = lmat(0x4b4b43, 0x17130a, 0.34)
+    const railBarMat = lmat(0x75643e, 0x34250c, 0.46)
+    const railBaseMat = lmat(0x2a251b, 0x100b07, 0.24)
     const voiceMouthTexture = new THREE.TextureLoader().load(VOICE_MOUTH_TEXTURE_URL)
     voiceMouthTexture.colorSpace = THREE.SRGBColorSpace
     voiceMouthTexture.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy())
 
+    function boundaryRail(axis: 'x' | 'z', centerX: number, centerZ: number, length: number) {
+      const postCount = Math.max(2, Math.ceil(length / 1.85))
+      const step = length / postCount
+      for (let i = 0; i <= postCount; i += 1) {
+        const offset = -length / 2 + step * i
+        const x = axis === 'x' ? centerX + offset : centerX
+        const z = axis === 'z' ? centerZ + offset : centerZ
+        box(0.18, 1.62, 0.18, x, 0.81, z, railPostMat)
+        box(0.28, 0.1, 0.28, x, 1.67, z, railBarMat)
+      }
+      if (axis === 'x') {
+        box(length, 0.22, 0.3, centerX, 0.11, centerZ, railBaseMat)
+        box(length, 0.14, 0.14, centerX, 1.36, centerZ, railBarMat)
+        box(length, 0.12, 0.12, centerX, 0.88, centerZ, railPostMat)
+        box(length, 0.1, 0.1, centerX, 0.48, centerZ, railPostMat)
+      } else {
+        box(0.3, 0.22, length, centerX, 0.11, centerZ, railBaseMat)
+        box(0.14, 0.14, length, centerX, 1.36, centerZ, railBarMat)
+        box(0.12, 0.12, length, centerX, 0.88, centerZ, railPostMat)
+        box(0.1, 0.1, length, centerX, 0.48, centerZ, railPostMat)
+      }
+    }
+
     box(18,10,0.8,   0, 5,-13, wallMat)
-    box(OUTSIDE_BOUNDARY_THICKNESS,10,OUTSIDE_GROUND_DEPTH,OUTSIDE_WALK_BOUNDS.minX - OUTSIDE_BOUNDARY_THICKNESS / 2,5,OUTSIDE_GROUND_CENTER_Z,wallMat)
-    box(OUTSIDE_BOUNDARY_THICKNESS,10,OUTSIDE_GROUND_DEPTH,OUTSIDE_WALK_BOUNDS.maxX + OUTSIDE_BOUNDARY_THICKNESS / 2,5,OUTSIDE_GROUND_CENTER_Z,wallMat)
-    box(OUTSIDE_GROUND_WIDTH + OUTSIDE_BOUNDARY_THICKNESS * 2,1.35,0.65,0,0.675,OUTSIDE_WALK_BOUNDS.maxZ + 0.325,boundaryWallMat)
-    box(OUTSIDE_GROUND_WIDTH + OUTSIDE_BOUNDARY_THICKNESS * 2,0.12,0.74,0,1.42,OUTSIDE_WALK_BOUNDS.maxZ + 0.33,boundaryTrimMat)
+    boundaryRail('z', OUTSIDE_WALK_BOUNDS.minX - OUTSIDE_BOUNDARY_THICKNESS / 2, OUTSIDE_GROUND_CENTER_Z, OUTSIDE_GROUND_DEPTH)
+    boundaryRail('z', OUTSIDE_WALK_BOUNDS.maxX + OUTSIDE_BOUNDARY_THICKNESS / 2, OUTSIDE_GROUND_CENTER_Z, OUTSIDE_GROUND_DEPTH)
+    boundaryRail('x', 0, OUTSIDE_WALK_BOUNDS.maxZ + OUTSIDE_BOUNDARY_THICKNESS / 2, OUTSIDE_GROUND_WIDTH + OUTSIDE_BOUNDARY_THICKNESS * 2)
     box(18,0.4,2,    0,10,-12, metalMat)
     box(0.15,8,0.15,-8.5,4,-13,lmat(0x2e3924,0x162410,0.6)); box(0.15,8,0.15,8.5,4,-13,lmat(0x6d3a15,0x4a2109,0.65))
 
