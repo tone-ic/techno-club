@@ -914,9 +914,14 @@ function currentServerMusicState() {
   return state
 }
 
+function currentTrackTimelineState() {
+  if (!_serverMusicState || _serverMusicState.source !== 'track') return null
+  return _serverMusicState
+}
+
 function syncTimelineFromAuthoritativeTrackState(force = false) {
-  const state = currentAuthoritativeMusicState()
-  if (!state || state.source !== 'track') return false
+  const state = currentTrackTimelineState()
+  if (!state) return false
   if (
     !force &&
     _musicTimeline &&
@@ -959,7 +964,7 @@ function seekAudioTo(audio: HTMLAudioElement, targetTime: number) {
 
 function alignMusicToTimeline(forceSeek = false) {
   if (!_musicTimeline || !_audio || _currentTrackIdx !== _musicTimeline.trackIdx) return
-  if (_audio.readyState < 2) return
+  if (_audio.readyState < 1) return
 
   const targetTime = getTrackPosition(_musicTimeline.startedAt, _audio.duration)
   if (!Number.isFinite(targetTime)) return
@@ -978,6 +983,16 @@ function alignMusicToTimeline(forceSeek = false) {
   } else {
     _audio.playbackRate = 1
   }
+}
+
+function alignMusicToTimelineAfterResume() {
+  if (!_musicTimeline || !_audio || _currentTrackIdx !== _musicTimeline.trackIdx) return
+  if (_audio.readyState < 1) return
+
+  const targetTime = getTrackPosition(_musicTimeline.startedAt, _audio.duration)
+  if (!Number.isFinite(targetTime)) return
+  const drift = signedTrackDriftSec(_audio.currentTime, targetTime, _audio.duration)
+  alignMusicToTimeline(Math.abs(drift) > MUSIC_START_SEEK_DRIFT_SEC)
 }
 
 function playTimelineAudio(alignAfterStart = false) {
@@ -1003,7 +1018,7 @@ function playTimelineAudio(alignAfterStart = false) {
   if (!_audio) return
   if (!_audio.paused) {
     void resumeAudioContext(_ctx)
-    if (alignAfterStart) alignMusicToTimeline()
+    if (alignAfterStart) alignMusicToTimelineAfterResume()
     return
   }
   void resumeAudioContext(_ctx)
@@ -1631,6 +1646,7 @@ async function ensureMainTrackAudioRouteInner() {
   }
   if (isDocumentHidden()) return false
 
+  preferPlaybackAudioSession()
   const { audio, ctx } = getAudioGraph()
   if (shouldUseServerDjSource()) {
     suspendLocalTrackForDj()
@@ -1705,9 +1721,11 @@ function getAudioGraph() {
       window.dispatchEvent(new CustomEvent('music-track-duration', {
         detail: { trackIdx: _currentTrackIdx, duration: _audio!.duration }
       }))
+      alignMusicToTimelineAfterResume()
       updateMediaSession(_audio!.paused ? 'paused' : 'playing')
     })
     _audio.addEventListener('play', () => {
+      alignMusicToTimelineAfterResume()
       updateMediaSession('playing')
       dispatchMusicOutput()
       dispatchMusicBpm()
@@ -2310,7 +2328,7 @@ export function applyMusicState(
     dispatchMusicBpm()
     // Тот же трек — только коррекция дрейфа
     const doSync = () => {
-      alignMusicToTimeline()
+      alignMusicToTimelineAfterResume()
       void ensureMainTrackAudioRoute()
     }
     if (audio.readyState >= 3) {
@@ -2481,10 +2499,22 @@ export default function MusicPlayer() {
         suspendLocalAudioForExternalOwner()
         return
       }
-      if (_hiddenSuspendedWithoutLockscreenAccess) {
+      const wasHiddenSuspendedWithoutAccess = _hiddenSuspendedWithoutLockscreenAccess
+      if (wasHiddenSuspendedWithoutAccess) {
         _hiddenSuspendedWithoutLockscreenAccess = false
         stopLockscreenAudio(false)
+        _hiddenSuspendedWithoutLockscreenAccess = true
       }
+      const finishMainTrackRestore = (ok: boolean) => {
+        if (ok) {
+          _hiddenSuspendedWithoutLockscreenAccess = false
+          setStarted(true)
+          setResumeRequired(false)
+          return
+        }
+        if (!isDocumentHidden()) setResumeRequired(true)
+      }
+      preferPlaybackAudioSession()
       void requestScreenWakeLock()
       if (shouldUseServerDjSource()) {
         stopLockscreenAudio(true)
@@ -2493,19 +2523,15 @@ export default function MusicPlayer() {
         await startDjAudioElement()
         applyOutputState()
         const ready = ctxReady && shouldUseDjOutput()
+        if (ready) _hiddenSuspendedWithoutLockscreenAccess = false
         setStarted(ready)
         setResumeRequired(!ready)
         return
       }
       if (!_lockscreenActive) {
         const ok = await ensureMainTrackAudioRoute()
-        if (ok) {
-          setStarted(true)
-          setResumeRequired(false)
-        } else {
-          applyOutputState()
-          setResumeRequired(true)
-        }
+        if (!ok) applyOutputState()
+        finishMainTrackRestore(ok)
         return
       }
       const wasDjLockscreen = _lockscreenSource === 'dj'
@@ -2515,12 +2541,7 @@ export default function MusicPlayer() {
         await startDjAudioElement()
       } else {
         const ok = await restoreTrackAudioFromLockscreen()
-        if (ok) {
-          setStarted(true)
-          setResumeRequired(false)
-        } else {
-          setResumeRequired(true)
-        }
+        finishMainTrackRestore(ok)
       }
       applyOutputState()
     }
