@@ -3,6 +3,7 @@ import { useLocation } from 'react-router-dom'
 import { RemoteAudioTrack, Room, RoomEvent } from 'livekit-client'
 import { getLiveKitToken, LIVEKIT_DJ_ROOM } from '@/utils/livekit'
 import type { MusicServerState } from '@/utils/wsClient'
+import { preferPlaybackAudioSession } from '@/utils/audioSession'
 
 const FALLBACK_TRACKS = [
   '/music/Deas%20-%20Drifted%20Off.mp3',
@@ -1090,7 +1091,7 @@ function lockscreenElementVolume(element: HTMLAudioElement | null, processedStre
 }
 
 function shouldUseNativeLockscreenAudio() {
-  return IS_IOS_AUDIO
+  return IS_MOBILE_AUDIO
 }
 
 function canUseLockscreenAudioNow(environment = _environment) {
@@ -1173,7 +1174,7 @@ function hasLockscreenMusicAccess() {
 }
 
 function shouldSuspendHiddenAudioWithoutAccess() {
-  return isDocumentHidden() && !canUseLockscreenAudioNow()
+  return isDocumentHidden() && IS_MOBILE_AUDIO && !canUseLockscreenAudioNow()
 }
 
 function getTrackTitle(trackIdx = _currentTrackIdx) {
@@ -2303,6 +2304,7 @@ export default function MusicPlayer() {
 
   const enableAudio = async () => {
     _hiddenSuspendedWithoutLockscreenAccess = false
+    preferPlaybackAudioSession()
     void requestScreenWakeLock()
     const { audio, ctx } = getAudioGraph()
     takeMusicOutputOwnership()
@@ -2515,12 +2517,27 @@ export default function MusicPlayer() {
         suspendLocalAudioForExternalOwner()
         return
       }
+      if (!IS_MOBILE_AUDIO) {
+        _hiddenSuspendedWithoutLockscreenAccess = false
+        preferPlaybackAudioSession()
+        if (shouldUseServerDjSource()) {
+          void startDjAudioElement()
+        } else if (_audio?.src && !_audio.paused) {
+          connectMainSpeaker()
+          void resumeAudioContext(_ctx)
+          alignMusicToTimeline()
+        }
+        applyOutputState()
+        updateMediaSession('playing')
+        return
+      }
       if (!hasLockscreenMusicAccess()) {
         suspendHiddenAudioWithoutAccess()
         setStarted(false)
         setResumeRequired(false)
         return
       }
+      preferPlaybackAudioSession()
       if (shouldUseServerDjSource()) {
         void playLockscreenDjAudio()
         return
