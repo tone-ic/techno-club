@@ -889,8 +889,9 @@ function applyServerMusicState(value: unknown, syncServerNow?: number, syncClien
   if (_serverMusicState.source === 'dj') {
     suspendLocalTrackForDj()
     void startDjAudioElement()
-  } else if (wasServerDjSource) {
-    void resumeLocalTrackAfterDj()
+  } else {
+    syncTimelineFromAuthoritativeTrackState()
+    if (wasServerDjSource) void resumeLocalTrackAfterDj()
   }
   dispatchMusicBpm()
   dispatchMusicOutput()
@@ -911,6 +912,21 @@ function currentServerMusicState() {
   if (!state || state.source !== 'track') return null
   if (_currentTrackIdx >= 0 && state.trackIdx !== _currentTrackIdx) return null
   return state
+}
+
+function syncTimelineFromAuthoritativeTrackState(force = false) {
+  const state = currentAuthoritativeMusicState()
+  if (!state || state.source !== 'track') return false
+  if (
+    !force &&
+    _musicTimeline &&
+    _musicTimeline.trackIdx === state.trackIdx &&
+    _musicTimeline.startedAt === state.startedAt
+  ) {
+    return false
+  }
+  applyMusicState(state.trackIdx, state.startedAt, state.serverNow, _serverMusicStateReceivedAt || Date.now())
+  return true
 }
 
 function getTrackPosition(startedAt: number, duration: number) {
@@ -977,6 +993,7 @@ function playTimelineAudio(alignAfterStart = false) {
     suspendLocalTrackForDj()
     return
   }
+  syncTimelineFromAuthoritativeTrackState()
   if (_lockscreenActive) {
     if (_lockscreenSource === 'dj') void playLockscreenDjAudio()
     else if (shouldKeepNativeLockscreenAudio()) void playLockscreenAudio(alignAfterStart)
@@ -1095,7 +1112,9 @@ function shouldUseNativeLockscreenAudio() {
 }
 
 function canUseLockscreenAudioNow(environment = _environment) {
-  return _audioRouteActive && (environment === 'club' || environment === 'outside')
+  if (!_audioRouteActive) return false
+  if (environment === 'outside' && IS_MOBILE_AUDIO) return false
+  return environment === 'club' || environment === 'outside'
 }
 
 function shouldKeepNativeLockscreenAudio() {
@@ -1370,6 +1389,8 @@ async function playLockscreenAudio(alignAfterStart = false) {
     stopLockscreenAudio(true)
     return false
   }
+  syncTimelineFromAuthoritativeTrackState()
+  if (alignAfterStart) alignMusicToTimeline(true)
   if (_lockscreenActive && _lockscreenSource === 'track' && _lockscreenAudio && !_lockscreenAudio.paused) {
     if (!keepNativeRoute && !isDocumentHidden()) {
       return restoreTrackAudioFromLockscreen()
@@ -1388,8 +1409,12 @@ async function playLockscreenAudio(alignAfterStart = false) {
   _lockscreenSwitching = true
   try {
     await resumeAudioContext(_ctx)
+    if (_audio) {
+      await waitForCanPlay(_audio)
+      alignMusicToTimeline(true)
+    }
     if (_audio?.paused) await _audio.play().catch(() => undefined)
-    if (alignAfterStart) alignMusicToTimeline(false)
+    if (alignAfterStart) alignMusicToTimeline(true)
     const lockscreenAudio = syncLockscreenAudioFromMain(useNativeElement)
     if (!lockscreenAudio) return false
     if (!isDocumentHidden() && !keepNativeRoute) {
@@ -1557,9 +1582,12 @@ async function restoreTrackAudioFromLockscreen() {
     await resumeAudioContext(_ctx)
     applyOutputState()
 
+    syncTimelineFromAuthoritativeTrackState()
+    await waitForCanPlay(_audio)
+    alignMusicToTimeline(true)
     await _audio.play()
     if (!(await ensureAudioContextRunning(_ctx))) return false
-    alignMusicToTimeline(false)
+    alignMusicToTimeline(true)
     applyOutputState()
     return true
   } catch {
@@ -1609,6 +1637,7 @@ async function ensureMainTrackAudioRouteInner() {
     await startDjAudioElement()
     return shouldUseDjOutput()
   }
+  syncTimelineFromAuthoritativeTrackState()
   if (!audio.src && _musicTimeline) {
     _currentTrackIdx = -1
     applyMusicState(_musicTimeline.trackIdx, _musicTimeline.startedAt)
@@ -1635,9 +1664,11 @@ async function ensureMainTrackAudioRouteInner() {
   try {
     const wasPaused = audio.paused
     await waitForCanPlay(audio)
+    syncTimelineFromAuthoritativeTrackState()
+    alignMusicToTimeline(true)
     await audio.play()
     if (!(await ensureAudioContextRunning(ctx))) return false
-    alignMusicToTimeline(wasPaused)
+    alignMusicToTimeline(wasPaused || Boolean(currentServerMusicState()))
     if (shouldKeepNativeLockscreenAudio()) {
       const ok = await playLockscreenAudio(true)
       if (ok) {
@@ -2311,6 +2342,7 @@ export default function MusicPlayer() {
     stopLockscreenAudio(true)
     if (!(await ensureAudioContextRunning(ctx))) return false
     await ensurePlayableMusicTimeline()
+    syncTimelineFromAuthoritativeTrackState()
     if (!audio.src && _musicTimeline) {
       _currentTrackIdx = -1
       applyMusicState(_musicTimeline.trackIdx, _musicTimeline.startedAt)
@@ -2329,6 +2361,8 @@ export default function MusicPlayer() {
 
     try {
       await waitForCanPlay(audio)
+      syncTimelineFromAuthoritativeTrackState()
+      alignMusicToTimeline(true)
       await audio.play()
       if (!(await ensureAudioContextRunning(ctx))) return false
       alignMusicToTimeline(true)
