@@ -1091,11 +1091,11 @@ function lockscreenElementVolume(element: HTMLAudioElement | null, processedStre
 }
 
 function shouldUseNativeLockscreenAudio() {
-  return IS_MOBILE_AUDIO
+  return true
 }
 
 function canUseLockscreenAudioNow(environment = _environment) {
-  return IS_MOBILE_AUDIO && _audioRouteActive && environment === 'club'
+  return _audioRouteActive && (environment === 'club' || environment === 'outside')
 }
 
 function shouldKeepNativeLockscreenAudio() {
@@ -2515,20 +2515,6 @@ export default function MusicPlayer() {
     const useLockscreenAudio = () => {
       if (hasActiveExternalMusicOutputOwner()) {
         suspendLocalAudioForExternalOwner()
-        return
-      }
-      if (!IS_MOBILE_AUDIO) {
-        _hiddenSuspendedWithoutLockscreenAccess = false
-        preferPlaybackAudioSession()
-        if (shouldUseServerDjSource()) {
-          void startDjAudioElement()
-        } else if (_audio?.src && !_audio.paused) {
-          connectMainSpeaker()
-          void resumeAudioContext(_ctx)
-          alignMusicToTimeline()
-        }
-        applyOutputState()
-        updateMediaSession('playing')
         return
       }
       if (!hasLockscreenMusicAccess()) {
