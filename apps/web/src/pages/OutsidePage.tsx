@@ -489,6 +489,7 @@ export default function OutsidePage() {
         )
         fp.position.set(0,1.86,0.22)
         fp.userData.isFacePlane = true
+        fp.visible = !group.userData.generatedModel
         group.add(fp)
       }
       img.src = faceUrl
@@ -610,7 +611,7 @@ export default function OutsidePage() {
       delete group.userData.generatedModelUrl
       delete group.userData.pendingGeneratedModelUrl
       group.children.forEach((child) => {
-        child.visible = true
+        if (!child.userData.isGeneratedVisualRoot) child.visible = true
       })
       applyAvatarFacingRotation(group, getAvatarMovementRotationY(group))
     }
@@ -628,7 +629,7 @@ export default function OutsidePage() {
           }
           forceGeneratedAvatarVisible(rig.root)
           group.children.forEach((child) => {
-            if (!child.userData.isNameTag && !child.userData.isMouth) child.visible = false
+            if (!child.userData.isNameTag && !child.userData.isMouth && !child.userData.isGeneratedVisualRoot) child.visible = false
           })
 
           const visualRoot = new THREE.Group()

@@ -282,11 +282,13 @@ export function createGeneratedAvatarRig(
 }
 
 function hasEmbeddedRig(model: THREE.Object3D, animations: THREE.AnimationClip[]): boolean {
-  if (animations.length > 0) return true
   let hasSkinnedMesh = false
   model.traverse((obj) => {
     if ((obj as THREE.SkinnedMesh).isSkinnedMesh) hasSkinnedMesh = true
   })
+  if (!hasSkinnedMesh && animations.length > 0) {
+    console.warn('[Avatar rig] Embedded animations found without skinned meshes; falling back to client auto-skin')
+  }
   return hasSkinnedMesh
 }
 
@@ -344,8 +346,9 @@ function createPreRiggedAvatarRig(
     root: model,
     reset: stopAndRestore,
     idle: (t: number, intensity = 1) => {
-      resetPreRiggedPose(runtime)
       const amount = Math.max(0, Math.min(1, intensity))
+      if (runtime.isDoorclubAutoRig && applyPreRiggedClip(runtime, 'idle', t, 8, amount)) return
+      resetPreRiggedPose(runtime)
       const root = runtime.mixer.getRoot() as THREE.Object3D
       const pulse = Math.sin(t)
       const side = Math.sin(t * 0.5)
@@ -365,6 +368,7 @@ function createPreRiggedAvatarRig(
       model.rotation.x = 0
       model.rotation.y = runtime.baseRotationY
       model.rotation.z = 0
+      if (runtime.isDoorclubAutoRig && applyPreRiggedClip(runtime, 'walk', t, 2)) return
       applyPreRiggedProceduralWalk(runtime, t)
     },
     dance: (
@@ -389,6 +393,7 @@ function createPreRiggedAvatarRig(
       model.rotation.y = runtime.baseRotationY
       model.rotation.z = 0
       if (danceId === 'dance_hip_hop_fbx' && applyPreRiggedHipHopDance(runtime, t, amount)) return
+      if (runtime.isDoorclubAutoRig && applyPreRiggedClip(runtime, danceId, t, DANCE_BEATS[danceId], amount)) return
       applyPreRiggedProceduralDance(runtime, t, moveFeet, feetT, danceId)
       blendPreRiggedPoseWithBase(runtime, amount)
     },
@@ -601,6 +606,35 @@ function applyPreRiggedProceduralDance(
   } else if (danceId === 'dance_head_touch_groove_03') {
     addEuler(runtime.rightUpperArm, 0.08, 0, 0.16)
   }
+}
+
+function applyPreRiggedClip(
+  runtime: PreRiggedAvatarRuntime,
+  clipId: PreRiggedClipId,
+  t: number,
+  cycleBeats = 1,
+  intensity = 1,
+): boolean {
+  const action = runtime.actions[clipId]
+  if (!action) return false
+
+  if (runtime.activeClip !== clipId) {
+    runtime.mixer.stopAllAction()
+    restoreBaseTransforms(runtime.baseTransforms)
+    action.reset()
+    action.enabled = true
+    action.play()
+    runtime.activeClip = clipId
+  }
+
+  const clip = action.getClip()
+  const duration = Math.max(0.001, clip.duration)
+  const beat = ((t / TAU) % cycleBeats + cycleBeats) % cycleBeats
+  action.time = (beat / Math.max(0.001, cycleBeats)) * duration
+  runtime.mixer.update(0)
+  blendPreRiggedPoseWithBase(runtime, intensity)
+  setJawOpen(runtime.morphTargets, 0)
+  return true
 }
 
 function applyPreRiggedHipHopDance(runtime: PreRiggedAvatarRuntime, t: number, intensity = 1): boolean {
