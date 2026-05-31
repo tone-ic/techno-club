@@ -1290,6 +1290,8 @@ export default function ClubPage() {
     }
     window.addEventListener(MOVEMENT_INPUT_RESET_EVENT, resetTransientInput)
     window.addEventListener('blur', resetTransientInput)
+    window.addEventListener('pagehide', resetTransientInput)
+    window.addEventListener('pageshow', resetTransientInput)
     document.addEventListener('visibilitychange', resetTransientInputOnHidden)
 
     const storedClubPosition = readStoredClubPosition()
@@ -2801,6 +2803,8 @@ export default function ClubPage() {
       window.visualViewport?.removeEventListener('resize', onResize)
       window.removeEventListener(MOVEMENT_INPUT_RESET_EVENT, resetTransientInput)
       window.removeEventListener('blur', resetTransientInput)
+      window.removeEventListener('pagehide', resetTransientInput)
+      window.removeEventListener('pageshow', resetTransientInput)
       document.removeEventListener('visibilitychange', resetTransientInputOnHidden)
       canvas.removeEventListener('mousedown', onMouseDown)
       canvas.removeEventListener('mousemove', onMouseMove)
@@ -4538,11 +4542,27 @@ function Joystick({ onMove }: { onMove: (x: number, z: number) => void }) {
     onMove(0, 0)
   }
 
+  useEffect(() => {
+    const reset = () => end()
+    const resetWhenHidden = () => {
+      if (document.visibilityState !== 'visible') reset()
+    }
+    window.addEventListener('blur', reset)
+    window.addEventListener('pagehide', reset)
+    document.addEventListener('visibilitychange', resetWhenHidden)
+    return () => {
+      window.removeEventListener('blur', reset)
+      window.removeEventListener('pagehide', reset)
+      document.removeEventListener('visibilitychange', resetWhenHidden)
+    }
+  }, [onMove])
+
   return (
     <div
       onTouchStart={(e) => start(e.touches[0].clientX, e.touches[0].clientY)}
       onTouchMove={(e) => { e.preventDefault(); move(e.touches[0].clientX, e.touches[0].clientY) }}
       onTouchEnd={end}
+      onTouchCancel={end}
       style={{
         position: 'absolute',
         bottom: 'calc(env(safe-area-inset-bottom, 0px) + 34px)',

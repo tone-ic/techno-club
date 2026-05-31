@@ -995,6 +995,15 @@ function alignMusicToTimelineAfterResume() {
   alignMusicToTimeline(Math.abs(drift) > MUSIC_START_SEEK_DRIFT_SEC)
 }
 
+function alignMusicToTimelineGently() {
+  alignMusicToTimeline(false)
+}
+
+function alignMusicToTimelineForRouteRestore(wasPaused: boolean) {
+  if (wasPaused) alignMusicToTimelineAfterResume()
+  else alignMusicToTimelineGently()
+}
+
 function playTimelineAudio(alignAfterStart = false) {
   if (!ensureMusicOutputOwnership()) {
     suspendLocalAudioForExternalOwner()
@@ -1123,11 +1132,11 @@ function lockscreenElementVolume(element: HTMLAudioElement | null, processedStre
 }
 
 function shouldUseNativeLockscreenAudio() {
-  return false
+  return IS_MOBILE_AUDIO
 }
 
-function canUseLockscreenAudioNow() {
-  return false
+function canUseLockscreenAudioNow(environment = _environment) {
+  return IS_MOBILE_AUDIO && _audioRouteActive && environment === 'club'
 }
 
 function shouldKeepNativeLockscreenAudio() {
@@ -1206,7 +1215,7 @@ function hasLockscreenMusicAccess() {
 }
 
 function shouldSuspendHiddenAudioWithoutAccess() {
-  return isDocumentHidden()
+  return isDocumentHidden() && !canUseLockscreenAudioNow()
 }
 
 function getTrackTitle(trackIdx = _currentTrackIdx) {
@@ -1597,10 +1606,10 @@ async function restoreTrackAudioFromLockscreen() {
 
     syncTimelineFromAuthoritativeTrackState()
     await waitForCanPlay(_audio)
-    alignMusicToTimeline(true)
+    alignMusicToTimelineAfterResume()
     await _audio.play()
     if (!(await ensureAudioContextRunning(_ctx))) return false
-    alignMusicToTimeline(true)
+    alignMusicToTimelineAfterResume()
     applyOutputState()
     return true
   } catch {
@@ -1679,10 +1688,10 @@ async function ensureMainTrackAudioRouteInner() {
     const wasPaused = audio.paused
     await waitForCanPlay(audio)
     syncTimelineFromAuthoritativeTrackState()
-    alignMusicToTimeline(true)
+    alignMusicToTimelineForRouteRestore(wasPaused)
     await audio.play()
     if (!(await ensureAudioContextRunning(ctx))) return false
-    alignMusicToTimeline(wasPaused || Boolean(currentServerMusicState()))
+    alignMusicToTimelineForRouteRestore(wasPaused)
     if (shouldKeepNativeLockscreenAudio()) {
       const ok = await playLockscreenAudio(true)
       if (ok) {
@@ -2326,7 +2335,7 @@ export function applyMusicState(
     dispatchMusicBpm()
     // Тот же трек — только коррекция дрейфа
     const doSync = () => {
-      alignMusicToTimelineAfterResume()
+      alignMusicToTimelineGently()
       void ensureMainTrackAudioRoute()
     }
     if (audio.readyState >= 3) {
@@ -2505,6 +2514,7 @@ export default function MusicPlayer() {
       }
       const finishMainTrackRestore = (ok: boolean) => {
         if (ok) {
+          clearRestoreTimers()
           _hiddenSuspendedWithoutLockscreenAccess = false
           setStarted(true)
           setResumeRequired(false)
@@ -2524,6 +2534,10 @@ export default function MusicPlayer() {
         if (ready) _hiddenSuspendedWithoutLockscreenAccess = false
         setStarted(ready)
         setResumeRequired(!ready)
+        return
+      }
+      if (!_lockscreenActive && !needsMainTrackAudioRouteRestore()) {
+        finishMainTrackRestore(Boolean(_audio && !_audio.paused))
         return
       }
       if (!_lockscreenActive) {
