@@ -7,6 +7,7 @@ import {
   RoomEvent,
   Track,
 } from 'livekit-client'
+import { useAudioStore } from '@/store/audioStore'
 import { usePlayerStore } from '@/store/playerStore'
 import { getLiveKitToken, LIVEKIT_DJ_ROOM } from '@/utils/livekit'
 import { claimCaptureAudioSession, preferCaptureAudioSession, preferPlaybackAudioSession } from '@/utils/audioSession'
@@ -340,6 +341,7 @@ export default function VoiceChat({
   const environmentRef = useRef(environment)
   const savedIncomingVoicesEnabledRef = useRef(getSavedIncomingVoicesEnabled())
   const incomingVoicesEnabledRef = useRef(savedIncomingVoicesEnabledRef.current)
+  const incomingVoiceVolumeRef = useRef(1)
   const incomingAudioUnlockRequestedRef = useRef(false)
   const positionsRef = useRef<{ self: Position2; players: Map<string, Position2> }>({
     self: { x: 0, z: 0 },
@@ -354,6 +356,7 @@ export default function VoiceChat({
   const [voiceMode, setVoiceMode] = useState<VoiceMode>('ptt')
   const [pendingMicAction, setPendingMicAction] = useState<VoiceMode | null>(null)
   const [micNoticeSeen, setMicNoticeSeenState] = useState(getMicNoticeSeen)
+  const incomingVoiceVolume = useAudioStore((state) => state.voiceVolume)
 
   useEffect(() => {
     playerIdRef.current = myPlayerId
@@ -442,7 +445,7 @@ export default function VoiceChat({
     remotesRef.current.forEach((remote) => {
       const pos = players.get(remote.playerId)
       const volume = incomingVoicesEnabledRef.current && pos
-        ? voiceVolumeForDistance(voiceDistance(self, pos), environmentRef.current)
+        ? voiceVolumeForDistance(voiceDistance(self, pos), environmentRef.current) * incomingVoiceVolumeRef.current
         : 0
 
       if (!incomingVoicesEnabledRef.current) {
@@ -480,6 +483,11 @@ export default function VoiceChat({
     } catch {}
     updateRemoteVolumes()
   }, [incomingVoicesEnabled])
+
+  useEffect(() => {
+    incomingVoiceVolumeRef.current = incomingVoiceVolume
+    updateRemoteVolumes()
+  }, [incomingVoiceVolume])
 
   const detachRemote = (playerId: string) => {
     const remote = remotesRef.current.get(playerId)

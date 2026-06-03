@@ -3,6 +3,7 @@ import type { CSSProperties, FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { MUSIC_BPM_EVENT, MUSIC_OUTPUT_EVENT } from '@/components/MusicPlayer'
 import AdminDebugOverlay from '@/components/AdminDebugOverlay'
+import AppSettings, { SettingsButton } from '@/components/AppSettings'
 import VoiceChat, { MOVEMENT_INPUT_RESET_EVENT, PROXIMITY_VOICE_POSITIONS_EVENT, VOICE_LEVELS_EVENT, VOICE_TALKING_EVENT } from '@/components/VoiceChat'
 import {
   compressCameraPhoto,
@@ -152,6 +153,7 @@ export default function OutsidePage() {
   const [staffAttemptsLeft, setStaffAttemptsLeft] = useState(3)
   const [staffError, setStaffError] = useState('')
   const [queue, setQueue] = useState<QueueEntry[]>([])
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const [facePanelOpen, setFacePanelOpen] = useState(() => isFaceControlRole(usePlayerStore.getState().role || 'guest'))
   const [djPanelMinimized, setDjPanelMinimized] = useState(false)
   const [selectedQueueId, setSelectedQueueId] = useState<string | null>(null)
@@ -1464,6 +1466,11 @@ export default function OutsidePage() {
       )}
 
       <div style={{position:'absolute',bottom:'calc(env(safe-area-inset-bottom, 0px) + 34px)',right:16,display:'flex',flexDirection:'column',gap:7,zIndex:showOutsideHints?270:150}}>
+        <SettingsButton
+          active={settingsOpen}
+          onClick={() => { closeOutsideHints(); setSettingsOpen((open) => !open) }}
+        />
+
         <button onClick={handleQueueBtn} style={{
           padding:'8px 10px',borderRadius:4,minWidth:112,minHeight:38,
           cursor: queueState==='cooldown'?'not-allowed':'pointer',
@@ -1479,17 +1486,6 @@ export default function OutsidePage() {
                 : 'none',
         }}>
           {queueLabel()}
-        </button>
-
-        <button onClick={() => { if (!outfitOnCooldown) { closeOutsideHints(); setResumeOutfitGeneration(false); setShowOutfit(true) } }} style={{
-          padding:'8px 10px',borderRadius:4,minWidth:112,minHeight:32,
-          fontFamily:'monospace',fontSize:9,fontWeight:700,letterSpacing:0.6,
-          background: outfitOnCooldown ? 'rgba(20,15,30,0.6)' : 'rgba(30,20,40,0.85)',
-          color:      outfitOnCooldown ? '#444' : '#aaa',
-          border:     '1px solid #2a2a3a',
-          cursor:     outfitOnCooldown ? 'not-allowed' : 'pointer',
-        }}>
-          {outfitOnCooldown ? `🎭 ${fmtSecs(outfitCooldownSecs)}` : '🎭 ОБРАЗ'}
         </button>
 
         {canUseManagementPanel && (
@@ -1575,6 +1571,20 @@ export default function OutsidePage() {
           )}
         </>
       )}
+
+      <AppSettings
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        onChangeOutfit={() => {
+          if (!outfitOnCooldown) {
+            closeOutsideHints()
+            setResumeOutfitGeneration(false)
+            setShowOutfit(true)
+          }
+        }}
+        changeOutfitDisabled={outfitOnCooldown}
+        changeOutfitLabel={outfitOnCooldown ? `Сменить образ через ${fmtSecs(outfitCooldownSecs)}` : 'Сменить образ'}
+      />
 
       {showOutfit && (
         <OutfitModal

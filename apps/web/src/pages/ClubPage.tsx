@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom'
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import AdminDebugOverlay from '@/components/AdminDebugOverlay'
+import AppSettings, { SettingsButton } from '@/components/AppSettings'
 import { MUSIC_BPM_EVENT, MUSIC_OUTPUT_EVENT } from '@/components/MusicPlayer'
 import VoiceChat, { MOVEMENT_INPUT_RESET_EVENT, PROXIMITY_VOICE_POSITIONS_EVENT, VOICE_LEVELS_EVENT, VOICE_TALKING_EVENT } from '@/components/VoiceChat'
 import { usePlayerStore } from '@/store/playerStore'
@@ -143,6 +144,7 @@ export default function ClubPage() {
   const [drinkEffectKey, setDrinkEffectKey] = useState(0)
   const [selectedQueueId, setSelectedQueueId] = useState<string | null>(null)
   const [faceLog, setFaceLog] = useState<string[]>([])
+  const [settingsOpen, setSettingsOpen] = useState(false)
 
   const spawnFn = useRef<(p: RemotePlayer) => void>(() => {})
   const moveFn = useRef<(id: string, x: number, z: number, rotY: number, moving: boolean, musicDanceIntensity?: number, floorLevel?: ClubFloorLevel) => void>(() => {})
@@ -202,8 +204,8 @@ export default function ClubPage() {
   }, [admitted])
 
   useEffect(() => {
-    clubInputLockedRef.current = (isDj && !djPanelMinimized) || (isBartender && bartenderPanelOpen) || (isFaceControl && facePanelOpen) || managementPanelOpen || barCustomerOpen
-  }, [isDj, djPanelMinimized, isBartender, bartenderPanelOpen, isFaceControl, facePanelOpen, managementPanelOpen, barCustomerOpen])
+    clubInputLockedRef.current = (isDj && !djPanelMinimized) || (isBartender && bartenderPanelOpen) || (isFaceControl && facePanelOpen) || managementPanelOpen || barCustomerOpen || settingsOpen
+  }, [isDj, djPanelMinimized, isBartender, bartenderPanelOpen, isFaceControl, facePanelOpen, managementPanelOpen, barCustomerOpen, settingsOpen])
 
   useEffect(() => {
     if (isDj && !wasDjRef.current) setDjPanelMinimized(false)
@@ -3077,7 +3079,7 @@ export default function ClubPage() {
         }}>
           {CLUB_NAME} / {ZONE_LABELS[zone]}{zone === 'dj' ? ` / ${currentBpm === null ? '...' : currentBpm.toFixed(1)} BPM` : ''} / {displayName || 'GUEST'} / {clublesBalance} КЛБ / {playerCount} online
         </div>
-        <button onClick={leaveClub} style={{ ...hudButton('#2a2a3a', '#8f95aa'), minWidth: 86, pointerEvents: 'auto' }}>НАРУЖУ</button>
+        <SettingsButton active={settingsOpen} onClick={() => setSettingsOpen((open) => !open)} />
       </div>
 
       <div style={{ position: 'absolute', right: 16, bottom: 'calc(env(safe-area-inset-bottom, 0px) + 34px)', display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'stretch', zIndex: 150 }}>
@@ -3150,6 +3152,13 @@ export default function ClubPage() {
           onClose={() => setBarCustomerOpen(false)}
         />
       )}
+
+      <AppSettings
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        onChangeOutfit={() => navigate('/avatar')}
+        onExitOutside={leaveClub}
+      />
 
       {isDj && (
         <>

@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { supabase } from '@/utils/supabase'
@@ -131,58 +131,6 @@ function RequireRole({ allowed, children }: { allowed: string[]; children: React
   return <>{children}</>
 }
 
-function AccountSwitchButton() {
-  const location = useLocation()
-  const navigate = useNavigate()
-  const userId = usePlayerStore((state) => state.userId)
-  const [busy, setBusy] = useState(false)
-
-  if (!userId || location.pathname === '/login') return null
-
-  const switchAccount = async () => {
-    if (busy) return
-    setBusy(true)
-    try {
-      await supabase.auth.signOut()
-    } finally {
-      usePlayerStore.getState().reset()
-      navigate('/login', { replace: true })
-    }
-  }
-
-  return (
-    <button
-      type="button"
-      onClick={() => void switchAccount()}
-      disabled={busy}
-      aria-label="Сменить аккаунт"
-      title="Сменить аккаунт"
-      style={{
-        position: 'fixed',
-        top: 'max(12px, env(safe-area-inset-top))',
-        right: 'max(12px, env(safe-area-inset-right))',
-        zIndex: 10050,
-        height: 34,
-        padding: '0 12px',
-        borderRadius: 6,
-        border: '1px solid rgba(255,255,255,0.18)',
-        background: 'rgba(10, 12, 22, 0.72)',
-        color: '#f5f7ff',
-        fontFamily: 'Inter, system-ui, sans-serif',
-        fontSize: 12,
-        fontWeight: 700,
-        letterSpacing: 0,
-        cursor: busy ? 'default' : 'pointer',
-        opacity: busy ? 0.62 : 1,
-        backdropFilter: 'blur(12px)',
-        boxShadow: '0 8px 22px rgba(0,0,0,0.28)',
-      }}
-    >
-      {busy ? 'Выходим...' : 'Сменить аккаунт'}
-    </button>
-  )
-}
-
 export default function App() {
   const { userId, setUserId, setAccountEmail, setDisplayName, setRole } = usePlayerStore()
   const [authReady, setAuthReady] = useState(false)
@@ -277,7 +225,6 @@ export default function App() {
           <Route path="/"         element={<Navigate to="/outside" replace />} />
           <Route path="*"         element={<Navigate to="/" replace />} />
         </Routes>
-        <AccountSwitchButton />
         <MusicPlayer />
         <ScreenWakeLock />
       </Suspense>

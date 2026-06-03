@@ -4,6 +4,7 @@ import { RemoteAudioTrack, Room, RoomEvent } from 'livekit-client'
 import { getLiveKitToken, LIVEKIT_DJ_ROOM } from '@/utils/livekit'
 import { gameClient, type MusicServerState } from '@/utils/wsClient'
 import { preferPlaybackAudioSession } from '@/utils/audioSession'
+import { useAudioStore } from '@/store/audioStore'
 
 const FALLBACK_TRACKS = [
   '/music/Deas%20-%20Drifted%20Off.mp3',
@@ -2423,14 +2424,16 @@ export function applyMusicState(
     _currentTrackIdx = nextTrackIdx
     _trackBpmEstimator?.reset()
     _lastKnownBpm = null
+    const syncAtStart = () => {
+      if (!ensureTimelineAlignedBeforePlayback(true)) return
+      void ensureMainTrackAudioRoute()
+    }
+    audio.addEventListener('loadedmetadata', syncAtStart, { once: true })
+    audio.addEventListener('canplay', syncAtStart, { once: true })
     audio.src = _tracks[nextTrackIdx]
     audio.load()
     updateMediaSession(audio.paused ? 'paused' : 'playing')
     dispatchMusicBpm()
-    audio.addEventListener('canplay', () => {
-      if (!ensureTimelineAlignedBeforePlayback(true)) return
-      void ensureMainTrackAudioRoute()
-    }, { once: true })
   } else {
     dispatchMusicBpm()
     // Тот же трек — только коррекция дрейфа
@@ -2455,7 +2458,7 @@ export function applyMusicState(
 export default function MusicPlayer() {
   const location = useLocation()
   const audioRoute = location.pathname === '/outside' || location.pathname === '/club'
-  const [volume, setVolume]   = useState(0.4)
+  const volume = useAudioStore((state) => state.masterVolume)
   const [started, setStarted] = useState(false)
   const [resumeRequired, setResumeRequired] = useState(false)
   const [djLive, setDjLive] = useState(false)
@@ -2918,8 +2921,6 @@ export default function MusicPlayer() {
     ? djBlocked ? '#ffb84d' : '#00e676'
     : started ? '#e040fb' : '#666'
   const playerTop = 'calc(env(safe-area-inset-top, 0px) + 72px)'
-  const volumeTop = 'calc(env(safe-area-inset-top, 0px) + 108px)'
-
   return (
     <>
       <button
@@ -2968,39 +2969,6 @@ export default function MusicPlayer() {
           {playerLabel}
         </span>
       </button>
-      <div
-        style={{
-          position: 'fixed',
-          right: 14,
-          top: volumeTop,
-          width: 30,
-          height: 150,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          background: 'rgba(13,13,26,0.56)',
-          border: '1px solid rgba(224,64,251,0.22)',
-          borderRadius: 7,
-          zIndex: 260,
-          pointerEvents: 'auto',
-        }}
-        onClick={(event) => event.stopPropagation()}
-        onPointerDown={(event) => event.stopPropagation()}
-      >
-        <input
-          className="music-volume-slider"
-          type="range" min={0} max={1} step={0.01} value={volume}
-          onChange={e => setVolume(parseFloat(e.target.value))}
-          aria-label="Громкость музыки"
-          style={{
-            width: 150,
-            height: 30,
-            transform: 'rotate(-90deg)',
-            cursor: 'pointer',
-            opacity: started ? 1 : 0.48,
-          }}
-        />
-      </div>
     </>
   )
 }

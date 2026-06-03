@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { persist } from 'zustand/middleware'
 
 interface AudioStore {
   audioContextReady: boolean
@@ -16,19 +17,35 @@ interface AudioStore {
   setVoiceVolume: (vol: number) => void
 }
 
-export const useAudioStore = create<AudioStore>()((set) => ({
-  audioContextReady: false,
-  djTrackActive: false,
-  ambientActive: false,
-  masterVolume: 1.0,
-  djVolume: 0.75,
-  voiceVolume: 1.0,
+function clampVolume(vol: number) {
+  return Math.max(0, Math.min(1, Number.isFinite(vol) ? vol : 0))
+}
 
-  // Вызывать при первом тапе пользователя — разблокирует AudioContext на iOS
-  unlockAudioContext: () => set({ audioContextReady: true }),
-  setDjTrackActive: (active) => set({ djTrackActive: active }),
-  setAmbientActive: (active) => set({ ambientActive: active }),
-  setMasterVolume: (vol) => set({ masterVolume: vol }),
-  setDjVolume: (vol) => set({ djVolume: vol }),
-  setVoiceVolume: (vol) => set({ voiceVolume: vol }),
-}))
+export const useAudioStore = create<AudioStore>()(
+  persist(
+    (set) => ({
+      audioContextReady: false,
+      djTrackActive: false,
+      ambientActive: false,
+      masterVolume: 0.4,
+      djVolume: 0.75,
+      voiceVolume: 1.0,
+
+      // Вызывать при первом тапе пользователя — разблокирует AudioContext на iOS
+      unlockAudioContext: () => set({ audioContextReady: true }),
+      setDjTrackActive: (active) => set({ djTrackActive: active }),
+      setAmbientActive: (active) => set({ ambientActive: active }),
+      setMasterVolume: (vol) => set({ masterVolume: clampVolume(vol) }),
+      setDjVolume: (vol) => set({ djVolume: clampVolume(vol) }),
+      setVoiceVolume: (vol) => set({ voiceVolume: clampVolume(vol) }),
+    }),
+    {
+      name: 'doorclub-audio',
+      partialize: (state) => ({
+        masterVolume: state.masterVolume,
+        djVolume: state.djVolume,
+        voiceVolume: state.voiceVolume,
+      }),
+    },
+  ),
+)

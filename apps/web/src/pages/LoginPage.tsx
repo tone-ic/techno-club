@@ -1,9 +1,11 @@
 import { FormEvent, useState } from 'react'
 import type { CSSProperties } from 'react'
+import { LanguageToggleButton, useAppLanguage } from '@/components/AppSettings'
 import { supabase } from '@/utils/supabase'
 import { getAuthRedirectUrl } from '@/utils/authRedirect'
 
 export default function LoginPage() {
+  const { language } = useAppLanguage()
   const [email, setEmail] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -13,7 +15,7 @@ export default function LoginPage() {
     event.preventDefault()
     const cleanEmail = email.trim().toLowerCase()
     if (!cleanEmail) {
-      setError('Укажи email, чтобы получить ссылку для входа.')
+      setError(language === 'ru' ? 'Укажи email, чтобы получить ссылку для входа.' : 'Enter an email to receive a sign-in link.')
       return
     }
 
@@ -40,11 +42,14 @@ export default function LoginPage() {
 
   return (
     <div style={styles.container}>
+      <LanguageToggleButton compact />
       <main style={styles.panel}>
         <div style={styles.kicker}>DOOR//CLUB</div>
-        <h1 style={styles.title}>Вход через email</h1>
+        <h1 style={styles.title}>{language === 'ru' ? 'Вход через email' : 'Email sign-in'}</h1>
         <p style={styles.sub}>
-          Регистрация гостя откроется только после подтверждения email. Без письма-ссылки профиль не создаётся.
+          {language === 'ru'
+            ? 'Регистрация гостя откроется только после подтверждения email. Без письма-ссылки профиль не создаётся.'
+            : 'Guest registration opens after email confirmation. A profile is created only from the magic link.'}
         </p>
 
         <form onSubmit={handleEmail} style={styles.form}>
@@ -62,19 +67,25 @@ export default function LoginPage() {
           </label>
 
           <button type="submit" style={styles.emailButton} disabled={loading}>
-            {loading ? 'ОТПРАВЛЯЕМ ССЫЛКУ...' : 'ПОЛУЧИТЬ ССЫЛКУ ДЛЯ ВХОДА'}
+            {loading
+              ? language === 'ru' ? 'ОТПРАВЛЯЕМ ССЫЛКУ...' : 'SENDING LINK...'
+              : language === 'ru' ? 'ПОЛУЧИТЬ ССЫЛКУ ДЛЯ ВХОДА' : 'GET SIGN-IN LINK'}
           </button>
         </form>
 
         {error && <div style={styles.error}>{error}</div>}
         {sent && (
           <div style={styles.success}>
-            Проверь почту и открой ссылку. После входа появится регистрация гостя.
+            {language === 'ru'
+              ? 'Проверь почту и открой ссылку. После входа появится регистрация гостя.'
+              : 'Check your inbox and open the link. Guest registration will appear after sign-in.'}
           </div>
         )}
 
         <p style={styles.legal}>
-          Только 18+. После входа нужно подтвердить возраст и выбрать уникальный никнейм.
+          {language === 'ru'
+            ? 'Только 18+. После входа нужно подтвердить возраст и выбрать уникальный никнейм.'
+            : '18+ only. After sign-in, confirm your age and choose a unique nickname.'}
         </p>
       </main>
     </div>
