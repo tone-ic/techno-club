@@ -304,7 +304,7 @@ function createPreRiggedAvatarRig(
   model.userData.isPreRiggedModel = true
   model.rotation.y = options.rotationY ?? 0
   applyGeneratedModelMaterialPass(model)
-  fitGeneratedModelToWorld(model, options.targetHeight ?? 2.15)
+  fitGeneratedModelToWorld(model, options.targetHeight ?? 2.15, { alignVertical: false })
   model.updateWorldMatrix(true, true)
   const mixer = new THREE.AnimationMixer(model)
 
@@ -1134,8 +1134,12 @@ function smoothNormalsByPosition(geometry: THREE.BufferGeometry): void {
   geometry.attributes.normal.needsUpdate = true
 }
 
-function fitGeneratedModelToWorld(model: THREE.Object3D, targetHeight: number): void {
-  alignGeneratedModelVertical(model)
+function fitGeneratedModelToWorld(
+  model: THREE.Object3D,
+  targetHeight: number,
+  options: { alignVertical?: boolean } = {},
+): void {
+  if (options.alignVertical !== false) alignGeneratedModelVertical(model)
 
   const box = new THREE.Box3().setFromObject(model)
   const size = new THREE.Vector3()

@@ -1143,6 +1143,10 @@ function shouldKeepNativeLockscreenAudio() {
   return shouldUseNativeLockscreenAudio() && canUseLockscreenAudioNow() && isDocumentHidden()
 }
 
+function shouldKeepMainTrackRouteWhileHidden() {
+  return !shouldUseNativeLockscreenAudio() && canUseLockscreenAudioNow()
+}
+
 function isDocumentHidden() {
   return typeof document !== 'undefined' && document.visibilityState === 'hidden'
 }
@@ -2506,6 +2510,8 @@ export default function MusicPlayer() {
         suspendLocalAudioForExternalOwner()
         return
       }
+      syncTimelineFromAuthoritativeTrackState(true)
+      if (_audio?.src) alignMusicToTimeline(true)
       const wasHiddenSuspendedWithoutAccess = _hiddenSuspendedWithoutLockscreenAccess
       if (wasHiddenSuspendedWithoutAccess) {
         _hiddenSuspendedWithoutLockscreenAccess = false
@@ -2537,6 +2543,7 @@ export default function MusicPlayer() {
         return
       }
       if (!_lockscreenActive && !needsMainTrackAudioRouteRestore()) {
+        if (_audio?.src) alignMusicToTimeline(true)
         finishMainTrackRestore(Boolean(_audio && !_audio.paused))
         return
       }
@@ -2582,6 +2589,12 @@ export default function MusicPlayer() {
     const useLockscreenAudio = () => {
       if (hasActiveExternalMusicOutputOwner()) {
         suspendLocalAudioForExternalOwner()
+        return
+      }
+      if (shouldKeepMainTrackRouteWhileHidden()) {
+        syncTimelineFromAuthoritativeTrackState(true)
+        if (_audio?.src) alignMusicToTimeline(true)
+        applyOutputState()
         return
       }
       if (!hasLockscreenMusicAccess()) {

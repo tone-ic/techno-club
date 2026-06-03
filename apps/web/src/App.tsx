@@ -4,6 +4,8 @@ import type { ReactNode } from 'react'
 import { supabase } from '@/utils/supabase'
 import { isEmailAuthorizedUser } from '@/utils/emailAuth'
 import { usePlayerStore } from '@/store/playerStore'
+import { DEFAULT_AVATAR_CONFIG } from '@shared/types'
+import type { AvatarConfig } from '@shared/types'
 import { lazy, Suspense } from 'react'
 import MusicPlayer from '@/components/MusicPlayer'
 import ScreenWakeLock from '@/components/ScreenWakeLock'
@@ -53,6 +55,26 @@ function RequireAvatar({ children }: { children: ReactNode }) {
   const [checkedUserId, setCheckedUserId] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
 
+  const restoreAvatarConfig = (record: any): AvatarConfig | null => {
+    const config = record?.config_json && typeof record.config_json === 'object'
+      ? record.config_json as Partial<AvatarConfig>
+      : null
+    const modelUrl = firstString(config?.modelUrl, config?.rpmGlbUrl, record?.glb_url, record?.model_url)
+    const faceTextureUrl = firstString(config?.faceTextureUrl, record?.face_tex_url, record?.face_texture_url)
+    const bodyTextureUrl = firstString(config?.bodyTextureUrl, record?.body_tex_url, record?.body_texture_url)
+
+    if (!config && !modelUrl && !faceTextureUrl && !bodyTextureUrl) return null
+    return {
+      ...DEFAULT_AVATAR_CONFIG,
+      ...config,
+      modelUrl: modelUrl ?? config?.modelUrl ?? null,
+      rpmGlbUrl: config?.rpmGlbUrl ?? null,
+      faceTextureUrl: faceTextureUrl ?? config?.faceTextureUrl ?? null,
+      bodyTextureUrl: bodyTextureUrl ?? config?.bodyTextureUrl ?? null,
+      autorig: config?.autorig ?? null,
+    }
+  }
+
   useEffect(() => {
     if (avatarConfig || !userId) {
       setLoading(false)
@@ -68,14 +90,15 @@ function RequireAvatar({ children }: { children: ReactNode }) {
       try {
         const { data } = await supabase
           .from('avatars')
-          .select('config_json')
+          .select('config_json, glb_url, face_tex_url')
           .eq('user_id', userId)
           .order('created_at', { ascending: false })
           .limit(1)
           .maybeSingle()
 
         if (cancelled) return
-        if (data?.config_json) setAvatarConfig(data.config_json as any)
+        const restored = restoreAvatarConfig(data)
+        if (restored) setAvatarConfig(restored)
         setCheckedUserId(userId)
         setLoading(false)
       } catch {
@@ -93,6 +116,13 @@ function RequireAvatar({ children }: { children: ReactNode }) {
   if (avatarConfig) return <>{children}</>
   if (!userId || loading || checkedUserId !== userId) return <LoadingScreen />
   return <Navigate to="/camera" replace />
+}
+
+function firstString(...values: unknown[]) {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value
+  }
+  return null
 }
 
 function RequireRole({ allowed, children }: { allowed: string[]; children: ReactNode }) {
