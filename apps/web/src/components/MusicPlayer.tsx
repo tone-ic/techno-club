@@ -1187,8 +1187,8 @@ function lockscreenElementVolume(element: HTMLAudioElement | null, processedStre
   return processedStream && element?.srcObject === processedStream ? 1 : fallbackVolume
 }
 
-function shouldUseNativeLockscreenAudio() {
-  return IS_MOBILE_AUDIO
+function shouldUseNativeLockscreenAudio(environment = _environment) {
+  return IS_MOBILE_AUDIO || (!IS_MOBILE_AUDIO && environment === 'club' && isDocumentHidden())
 }
 
 function canUseLockscreenAudioNow(environment = _environment) {
@@ -1669,10 +1669,10 @@ async function restoreTrackAudioFromLockscreen() {
 
     syncTimelineFromAuthoritativeTrackState()
     await waitForCanPlay(_audio)
-    alignMusicToTimelineAfterResume()
+    if (!forceAlignMusicToTimelineAfterInterruptedRoute()) alignMusicToTimelineAfterResume()
     await _audio.play()
     if (!(await ensureAudioContextRunning(_ctx))) return false
-    alignMusicToTimelineAfterResume()
+    if (!forceAlignMusicToTimelineAfterInterruptedRoute()) alignMusicToTimelineAfterResume()
     applyOutputState()
     return true
   } catch {
@@ -2507,9 +2507,28 @@ export default function MusicPlayer() {
       const { trackIdx, startedAt, serverNow, clientReceivedAt } = (e as CustomEvent).detail
       applyMusicState(trackIdx, startedAt, serverNow, clientReceivedAt)
     }
+    let restoreTimers: number[] = []
+    const clearRestoreTimers = () => {
+      restoreTimers.forEach((timer) => window.clearTimeout(timer))
+      restoreTimers = []
+    }
+    const restoreAfterFreshServerSync = () => {
+      if (isDocumentHidden() || !_audioRouteActive) return
+      if (!hasPendingForcedTimelineSeek() && !needsMainTrackAudioRouteRestore()) return
+      syncTimelineFromAuthoritativeTrackState(true)
+      forceAlignMusicToTimelineAfterInterruptedRoute()
+      void ensureMainTrackAudioRoute().then((ok) => {
+        if (!ok) return
+        clearRestoreTimers()
+        _hiddenSuspendedWithoutLockscreenAccess = false
+        setStarted(true)
+        setResumeRequired(false)
+      })
+    }
     const onServerMusicState = (e: Event) => {
       const { musicState, serverNow, clientReceivedAt } = (e as CustomEvent).detail ?? {}
       applyServerMusicState(musicState, serverNow, clientReceivedAt)
+      restoreAfterFreshServerSync()
       const serverDj = shouldUseServerDjSource()
       setDjLive(serverDj)
       setDjBlocked(serverDj && !shouldUseDjOutput())
@@ -2548,6 +2567,7 @@ export default function MusicPlayer() {
       rememberServerTimeSample(clientSentAt, serverNow, clientReceivedAt)
       if (musicState) applyServerMusicState(musicState, serverNow, clientReceivedAt)
       alignMusicToTimeline()
+      if (musicState) restoreAfterFreshServerSync()
     }
     const onDjState = (e: Event) => {
       const { active, blocked } = (e as CustomEvent).detail ?? {}
@@ -2568,11 +2588,6 @@ export default function MusicPlayer() {
           if (ok) setStarted(true)
         })
       }
-    }
-    let restoreTimers: number[] = []
-    const clearRestoreTimers = () => {
-      restoreTimers.forEach((timer) => window.clearTimeout(timer))
-      restoreTimers = []
     }
     const restoreMainAudio = async () => {
       if (isDocumentHidden() || !_audioRouteActive) return
