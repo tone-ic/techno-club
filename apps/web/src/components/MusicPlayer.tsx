@@ -1048,6 +1048,17 @@ function alignMusicToTimelineForRouteRestore(wasPaused: boolean) {
   else alignMusicToTimelineGently()
 }
 
+function ensureTimelineAlignedBeforePlayback(force = false) {
+  syncTimelineFromAuthoritativeTrackState(true)
+  if (!_audio?.src || _audio.readyState < 1) return false
+  if (hasPendingForcedTimelineSeek() || force) {
+    if (!alignMusicToTimeline(true)) return false
+    clearPendingForcedTimelineSeek()
+    return true
+  }
+  return alignMusicToTimeline(true)
+}
+
 function forceAlignMusicToTimelineAfterInterruptedRoute() {
   if (!hasPendingForcedTimelineSeek()) return false
   syncTimelineFromAuthoritativeTrackState(true)
@@ -1085,7 +1096,7 @@ function playTimelineAudio(alignAfterStart = false) {
     return
   }
   void resumeAudioContext(_ctx)
-  forceAlignMusicToTimelineAfterInterruptedRoute()
+  if (hasPendingForcedTimelineSeek() && !ensureTimelineAlignedBeforePlayback(true)) return
   if (alignAfterStart) alignMusicToTimeline(true)
   _audio.play()
     .then(() => {
@@ -1673,10 +1684,18 @@ async function restoreTrackAudioFromLockscreen() {
 
     syncTimelineFromAuthoritativeTrackState()
     await waitForCanPlay(_audio)
-    if (!forceAlignMusicToTimelineAfterInterruptedRoute()) alignMusicToTimelineAfterResume()
+    if (hasPendingForcedTimelineSeek()) {
+      if (!ensureTimelineAlignedBeforePlayback(true)) return false
+    } else {
+      alignMusicToTimelineAfterResume()
+    }
     await _audio.play()
     if (!(await ensureAudioContextRunning(_ctx))) return false
-    if (!forceAlignMusicToTimelineAfterInterruptedRoute()) alignMusicToTimelineAfterResume()
+    if (hasPendingForcedTimelineSeek()) {
+      if (!ensureTimelineAlignedBeforePlayback(true)) return false
+    } else {
+      alignMusicToTimelineAfterResume()
+    }
     applyOutputState()
     return true
   } catch {
@@ -1755,10 +1774,18 @@ async function ensureMainTrackAudioRouteInner() {
     const wasPaused = audio.paused
     await waitForCanPlay(audio)
     syncTimelineFromAuthoritativeTrackState()
-    alignMusicToTimelineForRouteRestore(wasPaused)
+    if (hasPendingForcedTimelineSeek()) {
+      if (!ensureTimelineAlignedBeforePlayback(true)) return false
+    } else {
+      alignMusicToTimelineForRouteRestore(wasPaused)
+    }
     await audio.play()
     if (!(await ensureAudioContextRunning(ctx))) return false
-    alignMusicToTimelineForRouteRestore(wasPaused)
+    if (hasPendingForcedTimelineSeek()) {
+      if (!ensureTimelineAlignedBeforePlayback(true)) return false
+    } else {
+      alignMusicToTimelineForRouteRestore(wasPaused)
+    }
     if (shouldKeepNativeLockscreenAudio()) {
       const ok = await playLockscreenAudio(true)
       if (ok) {
@@ -2401,7 +2428,7 @@ export function applyMusicState(
     updateMediaSession(audio.paused ? 'paused' : 'playing')
     dispatchMusicBpm()
     audio.addEventListener('canplay', () => {
-      if (alignMusicToTimeline(true)) clearPendingForcedTimelineSeek()
+      if (!ensureTimelineAlignedBeforePlayback(true)) return
       void ensureMainTrackAudioRoute()
     }, { once: true })
   } else {
@@ -2910,7 +2937,17 @@ export default function MusicPlayer() {
           fontFamily: 'monospace', zIndex: 260, pointerEvents: 'auto',
           cursor: needsResumeButton || djBlocked || !started ? 'pointer' : 'default',
         }}
-        onClick={enableAudio}
+        onPointerDown={(event) => event.stopPropagation()}
+        onClick={(event) => {
+          event.stopPropagation()
+          if (!needsResumeButton && !djBlocked && started && _audio && !_audio.paused) {
+            syncTimelineFromAuthoritativeTrackState(true)
+            alignMusicToTimeline(true)
+            applyOutputState()
+            return
+          }
+          void enableAudio()
+        }}
         aria-label={playerLabel}
       >
         <span style={{
