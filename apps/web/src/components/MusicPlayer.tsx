@@ -1136,7 +1136,7 @@ function shouldUseNativeLockscreenAudio() {
 }
 
 function canUseLockscreenAudioNow(environment = _environment) {
-  return IS_MOBILE_AUDIO && _audioRouteActive && environment === 'club'
+  return _audioRouteActive && environment === 'club'
 }
 
 function shouldKeepNativeLockscreenAudio() {

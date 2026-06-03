@@ -65,6 +65,9 @@ const GENERATED_ARM_WALK_SWAY_Z = 0.024
 const HIP_HOP_DANCE_URL = '/animations/hip-hop-dancing.fbx'
 const HIP_HOP_DANCE_BEATS = 16
 const FBX_POSITION_SCALE = 0.01
+const VERTICAL_ALIGNMENT_MAX_POINTS = 12_000
+const VERTICAL_ALIGNMENT_MIN_RADIANS = THREE.MathUtils.degToRad(2)
+const VERTICAL_ALIGNMENT_MAX_RADIANS = THREE.MathUtils.degToRad(35)
 const DANCE_BEATS: Record<GeneratedDanceId, number> = {
   dance_idle_groove_01: 8,
   dance_side_step_turn_02: 14,
@@ -1132,6 +1135,8 @@ function smoothNormalsByPosition(geometry: THREE.BufferGeometry): void {
 }
 
 function fitGeneratedModelToWorld(model: THREE.Object3D, targetHeight: number): void {
+  alignGeneratedModelVertical(model)
+
   const box = new THREE.Box3().setFromObject(model)
   const size = new THREE.Vector3()
   const center = new THREE.Vector3()
@@ -1141,6 +1146,102 @@ function fitGeneratedModelToWorld(model: THREE.Object3D, targetHeight: number): 
   const scale = targetHeight / Math.max(0.1, size.y)
   model.scale.setScalar(scale)
   model.position.set(-center.x * scale, -box.min.y * scale, -center.z * scale)
+}
+
+function alignGeneratedModelVertical(model: THREE.Object3D): void {
+  const axis = estimateGeneratedModelHeightAxis(model)
+  if (!axis) return
+  if (axis.y < 0) axis.negate()
+
+  const angle = axis.angleTo(new THREE.Vector3(0, 1, 0))
+  if (angle < VERTICAL_ALIGNMENT_MIN_RADIANS || angle > VERTICAL_ALIGNMENT_MAX_RADIANS) return
+
+  const correction = new THREE.Quaternion().setFromUnitVectors(axis, new THREE.Vector3(0, 1, 0))
+  for (const child of model.children) {
+    child.position.applyQuaternion(correction)
+    child.quaternion.premultiply(correction)
+    child.updateMatrix()
+  }
+  model.updateWorldMatrix(true, true)
+}
+
+function estimateGeneratedModelHeightAxis(model: THREE.Object3D): THREE.Vector3 | null {
+  model.updateWorldMatrix(true, true)
+  let vertexCount = 0
+  model.traverse((obj) => {
+    const mesh = obj as THREE.Mesh
+    const position = mesh.isMesh
+      ? (mesh.geometry as THREE.BufferGeometry | undefined)?.getAttribute('position') as THREE.BufferAttribute | undefined
+      : undefined
+    if (position) vertexCount += position.count
+  })
+  if (vertexCount < 3) return null
+
+  const stride = Math.max(1, Math.ceil(vertexCount / VERTICAL_ALIGNMENT_MAX_POINTS))
+  const points: number[] = []
+  const point = new THREE.Vector3()
+  model.traverse((obj) => {
+    const mesh = obj as THREE.Mesh
+    const position = mesh.isMesh
+      ? (mesh.geometry as THREE.BufferGeometry | undefined)?.getAttribute('position') as THREE.BufferAttribute | undefined
+      : undefined
+    if (!position) return
+    mesh.updateWorldMatrix(true, false)
+    for (let i = 0; i < position.count; i += stride) {
+      point.fromBufferAttribute(position, i)
+      mesh.localToWorld(point)
+      model.worldToLocal(point)
+      points.push(point.x, point.y, point.z)
+    }
+  })
+  if (points.length < 9) return null
+
+  return estimatePrincipalAxis(points)
+}
+
+function estimatePrincipalAxis(points: number[]): THREE.Vector3 | null {
+  const count = points.length / 3
+  let meanX = 0
+  let meanY = 0
+  let meanZ = 0
+  for (let i = 0; i < points.length; i += 3) {
+    meanX += points[i]
+    meanY += points[i + 1]
+    meanZ += points[i + 2]
+  }
+  meanX /= count
+  meanY /= count
+  meanZ /= count
+
+  let xx = 0
+  let xy = 0
+  let xz = 0
+  let yy = 0
+  let yz = 0
+  let zz = 0
+  for (let i = 0; i < points.length; i += 3) {
+    const x = points[i] - meanX
+    const y = points[i + 1] - meanY
+    const z = points[i + 2] - meanZ
+    xx += x * x
+    xy += x * y
+    xz += x * z
+    yy += y * y
+    yz += y * z
+    zz += z * z
+  }
+
+  const axis = new THREE.Vector3(0, 1, 0)
+  for (let i = 0; i < 14; i += 1) {
+    const x = xx * axis.x + xy * axis.y + xz * axis.z
+    const y = xy * axis.x + yy * axis.y + yz * axis.z
+    const z = xz * axis.x + yz * axis.y + zz * axis.z
+    axis.set(x, y, z)
+    if (axis.lengthSq() < 1e-10) return null
+    axis.normalize()
+  }
+
+  return axis
 }
 
 function getRigBounds(model: THREE.Object3D): RigBounds {

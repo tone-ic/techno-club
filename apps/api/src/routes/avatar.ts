@@ -1119,17 +1119,32 @@ function findWindowsBlenderExecutable(): string | null {
 }
 
 function blenderAutorigScriptPath(): string {
-  return process.env.BLENDER_AUTORIG_SCRIPT ||
-    path.resolve(__dirname, '../../scripts/avatar-autorig.blender.py')
+  const configured = process.env.BLENDER_AUTORIG_SCRIPT?.trim()
+  if (configured) {
+    return path.isAbsolute(configured) ? configured : path.resolve(process.cwd(), configured)
+  }
+
+  const candidates = [
+    path.resolve(__dirname, '../../scripts/avatar-autorig.blender.py'),
+    path.resolve(process.cwd(), 'scripts/avatar-autorig.blender.py'),
+    path.resolve(process.cwd(), 'apps/api/scripts/avatar-autorig.blender.py'),
+  ]
+  return candidates.find((candidate) => existsSync(candidate)) ?? candidates[0]
 }
 
 function runBlenderAutorig(inputPath: string, outputPath: string): Promise<void> {
   return new Promise((resolve, reject) => {
+    const scriptPath = blenderAutorigScriptPath()
+    if (!existsSync(scriptPath)) {
+      reject(new Error(`Blender autorig script not found: ${scriptPath}`))
+      return
+    }
+
     const args = [
       '--background',
       '--factory-startup',
       '--python',
-      blenderAutorigScriptPath(),
+      scriptPath,
       '--',
       inputPath,
       outputPath,

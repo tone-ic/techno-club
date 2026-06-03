@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom'
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { supabase } from '@/utils/supabase'
@@ -49,15 +49,108 @@ function RequireOnboarding({ state, children }: { state: OnboardingState; childr
 }
 
 function RequireAvatar({ children }: { children: ReactNode }) {
-  const { avatarConfig } = usePlayerStore()
-  if (!avatarConfig) return <Navigate to="/camera" replace />
-  return <>{children}</>
+  const { userId, avatarConfig, setAvatarConfig } = usePlayerStore()
+  const [checkedUserId, setCheckedUserId] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
+
+  useEffect(() => {
+    if (avatarConfig || !userId) {
+      setLoading(false)
+      setCheckedUserId(userId)
+      return
+    }
+
+    let cancelled = false
+    setLoading(true)
+    setCheckedUserId(null)
+
+    void (async () => {
+      try {
+        const { data } = await supabase
+          .from('avatars')
+          .select('config_json')
+          .eq('user_id', userId)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle()
+
+        if (cancelled) return
+        if (data?.config_json) setAvatarConfig(data.config_json as any)
+        setCheckedUserId(userId)
+        setLoading(false)
+      } catch {
+        if (cancelled) return
+        setCheckedUserId(userId)
+        setLoading(false)
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [userId, avatarConfig, setAvatarConfig])
+
+  if (avatarConfig) return <>{children}</>
+  if (!userId || loading || checkedUserId !== userId) return <LoadingScreen />
+  return <Navigate to="/camera" replace />
 }
 
 function RequireRole({ allowed, children }: { allowed: string[]; children: ReactNode }) {
   const role = usePlayerStore((state) => state.role)
   if (!allowed.includes(role)) return <Navigate to="/outside" replace />
   return <>{children}</>
+}
+
+function AccountSwitchButton() {
+  const location = useLocation()
+  const navigate = useNavigate()
+  const userId = usePlayerStore((state) => state.userId)
+  const [busy, setBusy] = useState(false)
+
+  if (!userId || location.pathname === '/login') return null
+
+  const switchAccount = async () => {
+    if (busy) return
+    setBusy(true)
+    try {
+      await supabase.auth.signOut()
+    } finally {
+      usePlayerStore.getState().reset()
+      navigate('/login', { replace: true })
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => void switchAccount()}
+      disabled={busy}
+      aria-label="Сменить аккаунт"
+      title="Сменить аккаунт"
+      style={{
+        position: 'fixed',
+        top: 'max(12px, env(safe-area-inset-top))',
+        right: 'max(12px, env(safe-area-inset-right))',
+        zIndex: 10050,
+        height: 34,
+        padding: '0 12px',
+        borderRadius: 6,
+        border: '1px solid rgba(255,255,255,0.18)',
+        background: 'rgba(10, 12, 22, 0.72)',
+        color: '#f5f7ff',
+        fontFamily: 'Inter, system-ui, sans-serif',
+        fontSize: 12,
+        fontWeight: 700,
+        letterSpacing: 0,
+        cursor: busy ? 'default' : 'pointer',
+        opacity: busy ? 0.62 : 1,
+        backdropFilter: 'blur(12px)',
+        boxShadow: '0 8px 22px rgba(0,0,0,0.28)',
+      }}
+    >
+      {busy ? 'Выходим...' : 'Сменить аккаунт'}
+    </button>
+  )
 }
 
 export default function App() {
@@ -154,6 +247,7 @@ export default function App() {
           <Route path="/"         element={<Navigate to="/outside" replace />} />
           <Route path="*"         element={<Navigate to="/" replace />} />
         </Routes>
+        <AccountSwitchButton />
         <MusicPlayer />
         <ScreenWakeLock />
       </Suspense>
