@@ -302,6 +302,10 @@ class GameClient {
   private ws: WebSocket | null = null
   private callbacks: Callbacks | null = null
   private _myId: string | null = null
+  private lastUrl: string | null = null
+  private lastPayload: object | null = null
+  private manualDisconnect = false
+  private reconnecting = false
 
   constructor() {
     window.addEventListener('music-track-duration', (e: Event) => {
@@ -312,6 +316,14 @@ class GameClient {
     })
 
     window.setInterval(() => this.sendTimePing(), 2_000)
+
+    const reconnectWhenVisible = () => {
+      if (document.visibilityState !== 'visible') return
+      void this.reconnectLast()
+    }
+    window.addEventListener('focus', reconnectWhenVisible)
+    window.addEventListener('pageshow', reconnectWhenVisible)
+    document.addEventListener('visibilitychange', reconnectWhenVisible)
   }
 
   get id() { return this._myId }
@@ -320,6 +332,9 @@ class GameClient {
 
   connect(url: string, payload: object): Promise<void> {
     if (this.ws) { this.ws.onclose = null; this.ws.close(); this.ws = null }
+    this.lastUrl = url
+    this.lastPayload = payload
+    this.manualDisconnect = false
     const requestedRoom = (payload as { room?: unknown }).room === 'club' ? 'club' : 'outside'
     dispatchServerStatus({ connected: false, currentRoom: requestedRoom })
 
@@ -443,10 +458,28 @@ class GameClient {
         reject(e)
       }
       ws.onclose = () => {
+        if (this.ws === ws) this.ws = null
         this._myId = null
         dispatchServerStatus({ connected: false })
+        if (!this.manualDisconnect && document.visibilityState === 'visible') {
+          window.setTimeout(() => void this.reconnectLast(), 250)
+        }
       }
     })
+  }
+
+  private async reconnectLast() {
+    if (this.manualDisconnect || this.reconnecting || !this.lastUrl || !this.lastPayload) return
+    if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) return
+
+    this.reconnecting = true
+    try {
+      await this.connect(this.lastUrl, this.lastPayload)
+    } catch {
+      // The regular page loop will try again on the next focus/pageshow/visible event.
+    } finally {
+      this.reconnecting = false
+    }
   }
 
   move(x: number, z: number, rotY: number, moving: boolean, musicDanceIntensity?: number, floorLevel?: RemotePlayer['floorLevel']) {
@@ -478,6 +511,9 @@ class GameClient {
   }
 
   disconnect() {
+    this.manualDisconnect = true
+    this.lastUrl = null
+    this.lastPayload = null
     if (this.ws) { this.ws.onclose = null; this.ws.close(); this.ws = null }
     this._myId = null
     dispatchServerStatus({ connected: false })
