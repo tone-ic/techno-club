@@ -574,6 +574,7 @@ let _musicOutputOwnerExpiresAt = 0
 let _musicOutputOwnerChannel: BroadcastChannel | null = null
 let _musicOutputOwnerHeartbeat: number | null = null
 let _hiddenSuspendedWithoutLockscreenAccess = false
+let _forceTimelineSeekAfterHiddenSuspend = false
 let _lastKnownBpm: number | null = null
 let _screenWakeLock: { release: () => Promise<void>; addEventListener?: (type: string, listener: () => void) => void } | null = null
 let _screenWakeLockWanted = false
@@ -1000,8 +1001,21 @@ function alignMusicToTimelineGently() {
 }
 
 function alignMusicToTimelineForRouteRestore(wasPaused: boolean) {
+  if (_forceTimelineSeekAfterHiddenSuspend) {
+    alignMusicToTimeline(true)
+    _forceTimelineSeekAfterHiddenSuspend = false
+    return
+  }
   if (wasPaused) alignMusicToTimelineAfterResume()
   else alignMusicToTimelineGently()
+}
+
+function forceAlignMusicToTimelineAfterHiddenSuspend() {
+  if (!_forceTimelineSeekAfterHiddenSuspend) return
+  syncTimelineFromAuthoritativeTrackState(true)
+  if (!_audio?.src || _audio.readyState < 1) return
+  alignMusicToTimeline(true)
+  _forceTimelineSeekAfterHiddenSuspend = false
 }
 
 function playTimelineAudio(alignAfterStart = false) {
@@ -1571,6 +1585,7 @@ function suspendLocalAudioForExternalOwner() {
 function suspendHiddenAudioWithoutAccess() {
   stopLockscreenAudio(false)
   _hiddenSuspendedWithoutLockscreenAccess = true
+  _forceTimelineSeekAfterHiddenSuspend = true
   _audio?.pause()
   _djLockscreenElement?.pause()
   disconnectMainSpeaker()
@@ -2339,7 +2354,12 @@ export function applyMusicState(
     dispatchMusicBpm()
     // Тот же трек — только коррекция дрейфа
     const doSync = () => {
-      alignMusicToTimelineGently()
+      if (_forceTimelineSeekAfterHiddenSuspend) {
+        alignMusicToTimeline(true)
+        _forceTimelineSeekAfterHiddenSuspend = false
+      } else {
+        alignMusicToTimelineGently()
+      }
       void ensureMainTrackAudioRoute()
     }
     if (audio.readyState >= 3) {
@@ -2511,6 +2531,7 @@ export default function MusicPlayer() {
         return
       }
       syncTimelineFromAuthoritativeTrackState(true)
+      forceAlignMusicToTimelineAfterHiddenSuspend()
       if (_audio?.src) alignMusicToTimeline(true)
       const wasHiddenSuspendedWithoutAccess = _hiddenSuspendedWithoutLockscreenAccess
       if (wasHiddenSuspendedWithoutAccess) {
@@ -2543,6 +2564,7 @@ export default function MusicPlayer() {
         return
       }
       if (!_lockscreenActive && !needsMainTrackAudioRouteRestore()) {
+        forceAlignMusicToTimelineAfterHiddenSuspend()
         if (_audio?.src) alignMusicToTimeline(true)
         finishMainTrackRestore(Boolean(_audio && !_audio.paused))
         return
