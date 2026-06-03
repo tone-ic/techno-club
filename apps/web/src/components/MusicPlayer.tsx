@@ -1187,8 +1187,8 @@ function lockscreenElementVolume(element: HTMLAudioElement | null, processedStre
   return processedStream && element?.srcObject === processedStream ? 1 : fallbackVolume
 }
 
-function shouldUseNativeLockscreenAudio(environment = _environment) {
-  return IS_MOBILE_AUDIO || (!IS_MOBILE_AUDIO && environment === 'club' && isDocumentHidden())
+function shouldUseNativeLockscreenAudio() {
+  return IS_MOBILE_AUDIO
 }
 
 function canUseLockscreenAudioNow(environment = _environment) {
@@ -1201,6 +1201,10 @@ function shouldKeepNativeLockscreenAudio() {
 
 function shouldKeepMainTrackRouteWhileHidden() {
   return !shouldUseNativeLockscreenAudio() && canUseLockscreenAudioNow()
+}
+
+function shouldIgnoreHiddenAudioEvents() {
+  return !IS_MOBILE_AUDIO && _environment === 'club'
 }
 
 function isDocumentHidden() {
@@ -2513,6 +2517,7 @@ export default function MusicPlayer() {
       restoreTimers = []
     }
     const restoreAfterFreshServerSync = () => {
+      if (shouldIgnoreHiddenAudioEvents()) return
       if (isDocumentHidden() || !_audioRouteActive) return
       if (!hasPendingForcedTimelineSeek() && !needsMainTrackAudioRouteRestore()) return
       syncTimelineFromAuthoritativeTrackState(true)
@@ -2662,6 +2667,7 @@ export default function MusicPlayer() {
       })
     }
     const claimAndScheduleMainAudioRestore = () => {
+      if (shouldIgnoreHiddenAudioEvents()) return
       if (_audioRouteActive) takeMusicOutputOwnership()
       requestFreshResumeMusicState()
       scheduleMainAudioRestore()
@@ -2676,6 +2682,10 @@ export default function MusicPlayer() {
       scheduleMainAudioRestore()
     }
     const useLockscreenAudio = () => {
+      if (shouldIgnoreHiddenAudioEvents()) {
+        applyOutputState()
+        return
+      }
       markMusicTimelineInterrupted()
       if (hasActiveExternalMusicOutputOwner()) {
         suspendLocalAudioForExternalOwner()
@@ -2703,6 +2713,7 @@ export default function MusicPlayer() {
       void playLockscreenAudio(true)
     }
     const onVisibilityChange = () => {
+      if (shouldIgnoreHiddenAudioEvents()) return
       if (document.visibilityState === 'hidden') {
         markMusicTimelineInterrupted()
         useLockscreenAudio()
