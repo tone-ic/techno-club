@@ -2205,7 +2205,13 @@ wss.on('connection', (ws) => {
         broadcastMusicSync()
       }
     } else if (msg.type === 'timePing') {
-      ws.send(JSON.stringify({ type:'timePong', clientSentAt: msg.clientSentAt, serverNow: Date.now() }))
+      const musicState = currentMusicState()
+      ws.send(JSON.stringify({
+        type:'timePong',
+        clientSentAt: msg.clientSentAt,
+        serverNow: musicState.serverNow,
+        musicState,
+      }))
     }
   })
 

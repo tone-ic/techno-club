@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useLocation } from 'react-router-dom'
 import { RemoteAudioTrack, Room, RoomEvent } from 'livekit-client'
 import { getLiveKitToken, LIVEKIT_DJ_ROOM } from '@/utils/livekit'
-import type { MusicServerState } from '@/utils/wsClient'
+import { gameClient, type MusicServerState } from '@/utils/wsClient'
 import { preferPlaybackAudioSession } from '@/utils/audioSession'
 
 const FALLBACK_TRACKS = [
@@ -486,6 +486,8 @@ let _outsideDoorProximity = 0
 let _musicTimeline: { trackIdx: number; startedAt: number } | null = null
 let _serverMusicState: MusicServerState | null = null
 let _serverMusicStateReceivedAt = 0
+let _freshResumeMusicStateRequestedAt = 0
+let _freshResumeMusicStateWaitUntil = 0
 let _bestTimeSyncRttMs = Number.POSITIVE_INFINITY
 let _lockscreenActive = false
 let _lockscreenSource: 'track' | 'dj' | null = null
@@ -1012,6 +1014,21 @@ function markMusicTimelineInterrupted() {
   _forceTimelineSeekAfterVisibilityRestore = true
 }
 
+function requestFreshResumeMusicState(waitMs = 900) {
+  const now = Date.now()
+  _freshResumeMusicStateRequestedAt = now
+  _freshResumeMusicStateWaitUntil = now + waitMs
+  gameClient.requestTimeSync()
+}
+
+function shouldWaitForFreshResumeMusicState() {
+  return (
+    hasPendingForcedTimelineSeek() &&
+    Date.now() < _freshResumeMusicStateWaitUntil &&
+    _serverMusicStateReceivedAt < _freshResumeMusicStateRequestedAt
+  )
+}
+
 function hasPendingForcedTimelineSeek() {
   return _forceTimelineSeekAfterHiddenSuspend || _forceTimelineSeekAfterOutputHandoff || _forceTimelineSeekAfterVisibilityRestore
 }
@@ -1054,6 +1071,7 @@ function playTimelineAudio(alignAfterStart = false) {
     return
   }
   syncTimelineFromAuthoritativeTrackState()
+  if (shouldWaitForFreshResumeMusicState()) return
   if (_lockscreenActive) {
     if (_lockscreenSource === 'dj') void playLockscreenDjAudio()
     else if (shouldKeepNativeLockscreenAudio()) void playLockscreenAudio(alignAfterStart)
@@ -2521,13 +2539,14 @@ export default function MusicPlayer() {
       }
     }
     const onServerTime = (e: Event) => {
-      const { clientSentAt, serverNow, clientReceivedAt } = (e as CustomEvent).detail ?? {}
+      const { clientSentAt, serverNow, clientReceivedAt, musicState } = (e as CustomEvent).detail ?? {}
       if (
         typeof clientSentAt !== 'number' ||
         typeof serverNow !== 'number' ||
         typeof clientReceivedAt !== 'number'
       ) return
       rememberServerTimeSample(clientSentAt, serverNow, clientReceivedAt)
+      if (musicState) applyServerMusicState(musicState, serverNow, clientReceivedAt)
       alignMusicToTimeline()
     }
     const onDjState = (e: Event) => {
@@ -2561,6 +2580,7 @@ export default function MusicPlayer() {
         suspendLocalAudioForExternalOwner()
         return
       }
+      if (shouldWaitForFreshResumeMusicState()) return
       syncTimelineFromAuthoritativeTrackState(true)
       forceAlignMusicToTimelineAfterInterruptedRoute()
       if (_audio?.src) alignMusicToTimeline(true)
@@ -2628,6 +2648,7 @@ export default function MusicPlayer() {
     }
     const claimAndScheduleMainAudioRestore = () => {
       if (_audioRouteActive) takeMusicOutputOwnership()
+      requestFreshResumeMusicState()
       scheduleMainAudioRestore()
     }
     const onVoiceCaptureAudioState = (event: Event) => {
@@ -2672,6 +2693,7 @@ export default function MusicPlayer() {
         useLockscreenAudio()
       } else {
         markMusicTimelineInterrupted()
+        requestFreshResumeMusicState()
         claimAndScheduleMainAudioRestore()
       }
     }

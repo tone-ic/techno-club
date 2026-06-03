@@ -383,8 +383,10 @@ class GameClient {
                 clientSentAt: msg.clientSentAt,
                 serverNow: msg.serverNow,
                 clientReceivedAt,
+                musicState: msg.musicState,
               }
             }))
+            if (msg.musicState) dispatchMusicServerState(msg.musicState, msg.serverNow, clientReceivedAt)
             break
           case 'queueUpdate':    cb.onQueueUpdate?.(msg.queue); break
           case 'queueJoined':    cb.onQueueJoined?.(msg.pos); break
@@ -525,6 +527,10 @@ class GameClient {
 
   private sendTimePing() {
     this._send({ type: 'timePing', clientSentAt: Date.now() })
+  }
+
+  requestTimeSync() {
+    this.sendTimePing()
   }
 }
 
