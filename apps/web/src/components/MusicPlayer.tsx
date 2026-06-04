@@ -31,8 +31,8 @@ const BPM_MIN = 60
 const BPM_MAX = 180
 const BPM_NORMALIZE_MIN = 96
 const BPM_BUCKETS = BPM_MAX - BPM_MIN + 1
-const BPM_WINDOW_SEC = 5.5
-const BPM_UPDATE_INTERVAL_SEC = 2
+const BPM_WINDOW_SEC = 7.5
+const BPM_UPDATE_INTERVAL_SEC = 1
 const BPM_MIN_ONSET_GAP_SEC = 0.09
 const BPM_PHASE_LOCK_RADIUS_SEC = 0.14
 const BPM_DOTTED_RELATION_MIN = 84
@@ -545,7 +545,7 @@ const OUTSIDE_EQ = {
 } as const
 const BPM_ANALYSIS_INTERVAL_MS = 250
 const BPM_BROADCAST_INTERVAL_MS = 1_000
-const LIVE_BPM_MIN_CONFIDENCE = 0.12
+const LIVE_BPM_MIN_CONFIDENCE = 0.08
 const SERVER_MUSIC_STATE_STALE_MS = 3_500
 const DJ_STREAM_BUFFER_SEC = 0.18
 const MUSIC_OUTPUT_OWNER_STORAGE_KEY = 'doorclub:music-output-owner'
@@ -1218,7 +1218,7 @@ function shouldKeepMainTrackRouteWhileHidden() {
 }
 
 function shouldIgnoreHiddenAudioEvents() {
-  return !IS_MOBILE_AUDIO && _environment === 'club'
+  return _audioRouteActive && _environment === 'club'
 }
 
 function isDocumentHidden() {
@@ -1905,8 +1905,7 @@ function currentMusicBpm(serverState = currentServerMusicState()) {
   if (authoritativeState?.source === 'dj') {
     const sourcePlaying = hasDjAudioSource()
     if (!sourcePlaying) return null
-    const serverBpm = Math.round(clamp(authoritativeState.bpm, BPM_MIN, BPM_MAX) * 10) / 10
-    return _lastKnownBpm ?? serverBpm ?? BPM_DISPLAY_FALLBACK
+    return _lastKnownBpm
   }
 
   const useDjOutput = shouldUseDjOutput()
@@ -1919,7 +1918,7 @@ function currentMusicBpm(serverState = currentServerMusicState()) {
     ? Boolean(_djTrack || _djMediaStreamTrack || (_djElement && !_djElement.paused))
     : Boolean(_audio && !_audio.paused)
   if (!sourcePlaying) return null
-  return _lastKnownBpm ?? BPM_DISPLAY_FALLBACK
+  return _lastKnownBpm ?? (useDjOutput ? null : BPM_DISPLAY_FALLBACK)
 }
 
 function dispatchMusicBpm() {
@@ -1932,15 +1931,18 @@ function dispatchMusicBpm() {
   const useLiveDjBpm = liveDjBpm !== null
   const ctx = _ctx
   const serverState = currentServerMusicState()
-  const bpm = currentMusicBpm(serverState)
+  const measuredDjBpm = liveDjBpm ?? (serverDjState ? _lastKnownBpm : null)
+  const bpm = serverDjState ? measuredDjBpm : currentMusicBpm(serverState)
+  const bpmSource = serverDjState
+    ? useLiveDjBpm
+      ? 'live'
+      : measuredDjBpm !== null ? 'last-live' : 'analyzing'
+    : useDjOutput ? 'live' : serverState?.bpmSource ?? 'fallback'
   const liveBeatAtMs = estimator?.lastBeatAtSec !== null && estimator?.lastBeatAtSec !== undefined && ctx
     ? performance.now() - Math.max(0, ctx.currentTime - estimator.lastBeatAtSec) * 1000
     : null
   const serverBeatAtMs = serverState && !useDjOutput
     ? performance.now() - Math.max(0, serverNow() - serverState.beatStartedAt)
-    : null
-  const serverDjBeatAtMs = serverDjState
-    ? performance.now() - Math.max(0, serverNow() - serverDjState.beatStartedAt)
     : null
 
   window.dispatchEvent(new CustomEvent(MUSIC_BPM_EVENT, {
@@ -1948,13 +1950,13 @@ function dispatchMusicBpm() {
       bpm,
       trackIdx: serverDjState ? serverDjState.trackIdx : serverState && !useDjOutput ? serverState.trackIdx : _currentTrackIdx,
       source: serverDjState ? 'dj' : 'track',
-      bpmSource: useLiveDjBpm ? 'live' : serverDjState ? serverDjState.bpmSource ?? 'fallback' : useDjOutput ? 'live' : serverState?.bpmSource ?? 'fallback',
-      confidence: useLiveDjBpm ? estimator?.confidence ?? 0 : serverDjState ? serverDjState.bpmConfidence ?? 0 : useDjOutput ? estimator?.confidence ?? 0 : serverState?.bpmConfidence ?? 0,
-      beatAtMs: useLiveDjBpm ? liveBeatAtMs : serverDjState ? serverDjBeatAtMs : useDjOutput ? liveBeatAtMs : serverBeatAtMs,
-      beatIntervalSec: useLiveDjBpm
-        ? estimator?.beatIntervalSec ?? (bpm ? 60 / bpm : null)
-        : serverDjState?.beatIntervalMs
-        ? serverDjState.beatIntervalMs / 1000
+      bpmSource,
+      confidence: useLiveDjBpm || serverDjState ? estimator?.confidence ?? 0 : useDjOutput ? estimator?.confidence ?? 0 : serverState?.bpmConfidence ?? 0,
+      beatAtMs: useLiveDjBpm ? liveBeatAtMs : serverDjState ? null : useDjOutput ? liveBeatAtMs : serverBeatAtMs,
+      beatIntervalSec: serverDjState
+        ? useLiveDjBpm
+          ? estimator?.beatIntervalSec ?? (bpm ? 60 / bpm : null)
+          : bpm ? 60 / bpm : null
         : useDjOutput
         ? estimator?.beatIntervalSec ?? (bpm ? 60 / bpm : null)
         : serverState?.beatIntervalMs
