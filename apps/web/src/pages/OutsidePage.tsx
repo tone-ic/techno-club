@@ -47,7 +47,6 @@ const MANAGEMENT_PANEL_TAB_KEY = 'doorclub-management-panel-tab'
 const OUTSIDE_INTRO_SEEN_KEY = 'doorclub-outside-intro-seen'
 const OUTSIDE_RETURNED_FROM_CLUB_KEY = 'doorclub-outside-returned-from-club'
 const OUTFIT_COOLDOWN_STORAGE_KEY = 'outfitCooldown'
-const OUTFIT_INITIAL_COOLDOWN_SESSION_KEY = 'doorclub-outfit-initial-cooldown-started'
 const OUTFIT_COOLDOWN_MS = 10 * 60 * 1000
 const DEFAULT_DRINK_MENU: DrinkMenuItem[] = [
   { id: 'neon_spritz', name: 'Неон-спритц', price: 120, effect: 'spark' },
@@ -111,14 +110,6 @@ function shouldShowOutsideIntro() {
 function readOutfitCooldownUntil() {
   const stored = Number(localStorage.getItem(OUTFIT_COOLDOWN_STORAGE_KEY) || 0)
   if (Number.isFinite(stored) && stored > Date.now()) return stored
-
-  if (sessionStorage.getItem(OUTFIT_INITIAL_COOLDOWN_SESSION_KEY) !== '1') {
-    const initialUntil = Date.now() + OUTFIT_COOLDOWN_MS
-    sessionStorage.setItem(OUTFIT_INITIAL_COOLDOWN_SESSION_KEY, '1')
-    localStorage.setItem(OUTFIT_COOLDOWN_STORAGE_KEY, String(initialUntil))
-    return initialUntil
-  }
-
   return 0
 }
 
@@ -1347,7 +1338,7 @@ export default function OutsidePage() {
     getTrellisAvatarGenerationStatus()
       .then((status) => {
         if (cancelled || !status.active || !status.job) return
-        if (status.job.status === 'running' || status.job.status === 'succeeded' || status.job.status === 'failed') {
+        if (status.job.status === 'running') {
           setResumeOutfitGeneration(true)
           setShowOutfit(true)
           closeOutsideHints()

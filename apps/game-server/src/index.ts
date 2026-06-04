@@ -872,8 +872,18 @@ function rememberPlayerRole(player: Player, role = player.role) {
   persistPlayerState(player)
 }
 
-function persistedRoleFor(economyKey: string, userId: string) {
-  return userId ? playerRoles.get(economyKey) ?? 'guest' : 'guest'
+function authorizedJoinRole(
+  economyKey: string,
+  userId: string,
+  persistedState: PersistedPlayerState | null,
+  handoff: PlayerSessionHandoff | null,
+) {
+  if (!userId) return 'guest'
+  const rememberedRole = playerRoles.get(economyKey)
+  if (rememberedRole) return rememberedRole
+  if (persistedState) return persistedState.role
+  if (handoff) return handoff.role
+  return 'guest'
 }
 
 function cooldownUntilFor(economyKey: string) {
@@ -1461,16 +1471,14 @@ wss.on('connection', (ws) => {
     if (msg.type === 'join') {
       playerId = `p${nextId++}`
       const room: 'outside' | 'club' = msg.room === 'club' ? 'club' : 'outside'
-      const requestedRole = VALID_ROLES.has(msg.role) ? msg.role as PlayerRole : 'guest'
       const requestedUserId = typeof msg.userId === 'string' ? msg.userId : ''
       const requestedEmail = normalizeAccountEmail(msg.email)
       const economyKey = requestedUserId || playerId
       const accountKey = accountKeyFor(requestedEmail, requestedUserId, playerId)
       const persistedState = requestedUserId ? await loadPlayerPersistence(economyKey) : null
       applyPersistedPlayerState(economyKey, persistedState)
-      const persistedRole = persistedRoleFor(economyKey, requestedUserId)
-      const authorizedRole = persistedRole === 'guest' && requestedRole === 'guest' ? requestedRole : persistedRole
       const handoff = closeExistingSessions(accountKey, playerId)
+      const authorizedRole = authorizedJoinRole(economyKey, requestedUserId, persistedState, handoff)
       const joinRole = roleIsAvailable(authorizedRole, playerId, requestedUserId) ? authorizedRole : 'guest'
       const spawn = room === 'club' && joinRole === 'dj'
         ? DJ_BOOTH_SPAWN

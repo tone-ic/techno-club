@@ -31,7 +31,7 @@ const BPM_MIN = 60
 const BPM_MAX = 180
 const BPM_NORMALIZE_MIN = 96
 const BPM_BUCKETS = BPM_MAX - BPM_MIN + 1
-const BPM_WINDOW_SEC = 8
+const BPM_WINDOW_SEC = 5.5
 const BPM_UPDATE_INTERVAL_SEC = 2
 const BPM_MIN_ONSET_GAP_SEC = 0.09
 const BPM_PHASE_LOCK_RADIUS_SEC = 0.14
@@ -2187,13 +2187,19 @@ async function startDjAudioElement() {
   await _djRoom?.startAudio().catch(() => undefined)
   _djElement.muted = true
   _djElement.volume = 0
-  try {
-    await _djElement.play()
-    _djPlaybackReady = true
-    _djPlaybackBlocked = false
-  } catch {
-    _djPlaybackReady = false
-    _djPlaybackBlocked = true
+  _djElement.pause()
+  if (_djMediaStreamTrack && _djGain) {
+    _djPlaybackReady = isAudioContextRunning(_ctx)
+    _djPlaybackBlocked = !_djPlaybackReady
+  } else {
+    try {
+      await _djElement.play()
+      _djPlaybackReady = true
+      _djPlaybackBlocked = false
+    } catch {
+      _djPlaybackReady = false
+      _djPlaybackBlocked = true
+    }
   }
   dispatchDjState(_djActive)
 }
@@ -2309,8 +2315,13 @@ async function connectLiveKitDjRoom() {
     _djRoom = null
   }
   const handleAudioPlayback = (playing: boolean) => {
-    _djPlaybackReady = playing
-    _djPlaybackBlocked = !playing
+    if (_djMediaStreamTrack && _djGain) {
+      _djPlaybackReady = isAudioContextRunning(_ctx)
+      _djPlaybackBlocked = !_djPlaybackReady
+    } else {
+      _djPlaybackReady = playing
+      _djPlaybackBlocked = !playing
+    }
     dispatchDjState(_djActive)
   }
 
