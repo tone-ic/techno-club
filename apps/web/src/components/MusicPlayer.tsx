@@ -1882,8 +1882,12 @@ function dispatchDjState(active: boolean) {
   dispatchMusicOutput()
 }
 
+function hasDjAudioSource() {
+  return Boolean(_djTrack || _djMediaStreamTrack || (_djElement && !_djElement.paused))
+}
+
 function currentLiveDjBpm(estimator = _djBpmEstimator) {
-  if (!shouldUseDjOutput()) return null
+  if (!estimator || !hasDjAudioSource()) return null
   if (!estimator?.bpm || estimator.confidence < LIVE_BPM_MIN_CONFIDENCE) return null
   return Math.round(clamp(estimator.reportedBpm ?? estimator.bpm, BPM_MIN, BPM_MAX) * 10) / 10
 }
@@ -1897,9 +1901,10 @@ function currentMusicBpm(serverState = currentServerMusicState()) {
 
   const authoritativeState = currentAuthoritativeMusicState()
   if (authoritativeState?.source === 'dj') {
-    const sourcePlaying = Boolean(_djTrack || _djMediaStreamTrack || (_djElement && !_djElement.paused))
+    const sourcePlaying = hasDjAudioSource()
     if (!sourcePlaying) return null
-    return _lastKnownBpm
+    const serverBpm = Math.round(clamp(authoritativeState.bpm, BPM_MIN, BPM_MAX) * 10) / 10
+    return _lastKnownBpm ?? serverBpm ?? BPM_DISPLAY_FALLBACK
   }
 
   const useDjOutput = shouldUseDjOutput()
@@ -1919,7 +1924,8 @@ function dispatchMusicBpm() {
   const authoritativeState = currentAuthoritativeMusicState()
   const serverDjState = authoritativeState?.source === 'dj' ? authoritativeState : null
   const useDjOutput = shouldUseDjOutput()
-  const estimator = useDjOutput ? _djBpmEstimator : null
+  const hasDjSignal = Boolean(serverDjState && hasDjAudioSource())
+  const estimator = hasDjSignal ? _djBpmEstimator : null
   const liveDjBpm = currentLiveDjBpm(estimator)
   const useLiveDjBpm = liveDjBpm !== null
   const ctx = _ctx
@@ -2024,13 +2030,13 @@ function sampleMusicBpm() {
     dispatchMusicOutput()
     return
   }
-  const useDjOutput = shouldUseDjOutput()
-  const sourcePlaying = useDjOutput
-    ? Boolean(_djTrack || _djMediaStreamTrack || (_djElement && !_djElement.paused))
-    : Boolean(_audio && !_audio.paused)
-  if (sourcePlaying) {
-    if (useDjOutput) _djBpmEstimator?.sample(ctx.currentTime)
-    else _trackBpmEstimator?.sample(ctx.currentTime)
+  const useServerDjSource = shouldUseServerDjSource()
+  const djSourcePlaying = useServerDjSource && hasDjAudioSource()
+  const trackSourcePlaying = !useServerDjSource && Boolean(_audio && !_audio.paused)
+  if (djSourcePlaying) {
+    _djBpmEstimator?.sample(ctx.currentTime)
+  } else if (trackSourcePlaying) {
+    _trackBpmEstimator?.sample(ctx.currentTime)
   }
   dispatchMusicOutput()
 }

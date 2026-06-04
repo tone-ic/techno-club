@@ -319,6 +319,7 @@ class GameClient {
   private lastPayload: object | null = null
   private manualDisconnect = false
   private reconnecting = false
+  private connectionSeq = 0
 
   constructor() {
     window.addEventListener('music-track-duration', (e: Event) => {
@@ -344,7 +345,16 @@ class GameClient {
   setCallbacks(cb: Callbacks) { this.callbacks = cb }
 
   connect(url: string, payload: object): Promise<void> {
-    if (this.ws) { this.ws.onclose = null; this.ws.close(); this.ws = null }
+    const connectionId = ++this.connectionSeq
+    if (this.ws) {
+      const previous = this.ws
+      previous.onopen = null
+      previous.onmessage = null
+      previous.onerror = null
+      previous.onclose = null
+      previous.close()
+      if (this.ws === previous) this.ws = null
+    }
     this.lastUrl = url
     this.lastPayload = payload
     this.manualDisconnect = false
@@ -356,6 +366,7 @@ class GameClient {
       this.ws = ws
 
       ws.onopen = () => {
+        if (this.ws !== ws || this.connectionSeq !== connectionId) return
         ws.send(JSON.stringify({ type: 'join', clientSessionId: getClientSessionId(), ...payload }))
         this.sendTimePing()
         dispatchServerStatus({ connected: true, currentRoom: requestedRoom })
@@ -363,6 +374,7 @@ class GameClient {
       }
 
       ws.onmessage = (e) => {
+        if (this.ws !== ws || this.connectionSeq !== connectionId) return
         const clientReceivedAt = Date.now()
         let msg: any
         try { msg = JSON.parse(e.data) } catch { return }
@@ -469,10 +481,12 @@ class GameClient {
       }
 
       ws.onerror = (e) => {
+        if (this.ws !== ws || this.connectionSeq !== connectionId) return
         dispatchServerStatus({ connected: false })
         reject(e)
       }
       ws.onclose = () => {
+        if (this.ws !== ws || this.connectionSeq !== connectionId) return
         if (this.ws === ws) this.ws = null
         this._myId = null
         dispatchServerStatus({ connected: false })
@@ -526,6 +540,7 @@ class GameClient {
   }
 
   disconnect() {
+    this.connectionSeq += 1
     this.manualDisconnect = true
     this.lastUrl = null
     this.lastPayload = null

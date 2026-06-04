@@ -275,9 +275,13 @@ function closeExistingSessions(accountKey: string, nextPlayerId: string) {
   const staleSessions = Array.from(players.values())
     .filter(player => player.id !== nextPlayerId && player.accountKey === accountKey)
 
-  let handoff: PlayerSessionHandoff | null = null
+  const handoffSource =
+    staleSessions.find(player => musicSource === 'dj' && djStreamPlayerId === player.id) ??
+    staleSessions.find(player => player.ws.readyState === WebSocket.OPEN) ??
+    staleSessions[0]
+  const handoff: PlayerSessionHandoff | null = handoffSource ? createPlayerSessionHandoff(handoffSource) : null
+
   staleSessions.forEach((player) => {
-    if (!handoff) handoff = createPlayerSessionHandoff(player)
     cancelDisconnectedSessionCleanup(player.id)
     removePlayerSession(player, 'replaced')
   })
@@ -294,7 +298,8 @@ function removePlayerSession(player: Player, reason: 'closed' | 'replaced' = 'cl
     if (idx !== -1) queue.splice(idx, 1)
     broadcast({ type:'queueUpdate', queue:queueSnapshot() })
   }
-  if (player.role === 'dj') markDjOffline(player)
+  const replacingDjSession = reason === 'replaced' && player.role === 'dj'
+  if (player.role === 'dj' && !replacingDjSession) markDjOffline(player)
   clearRoleSlot(playerId)
   staffEntryAttempts.delete(playerId)
   vipGuests.delete(playerId)
@@ -334,7 +339,7 @@ function removePlayerSession(player: Player, reason: 'closed' | 'replaced' = 'cl
       text: 'Смена ролей обновлена',
     })
   }
-  if (player.role === 'dj') broadcastDjSchedule()
+  if (player.role === 'dj' && !replacingDjSession) broadcastDjSchedule()
 
   if (reason === 'replaced' && player.ws.readyState === WebSocket.OPEN) {
     try {
