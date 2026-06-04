@@ -547,6 +547,7 @@ const BPM_ANALYSIS_INTERVAL_MS = 250
 const BPM_BROADCAST_INTERVAL_MS = 1_000
 const LIVE_BPM_MIN_CONFIDENCE = 0.12
 const SERVER_MUSIC_STATE_STALE_MS = 3_500
+const DJ_STREAM_BUFFER_SEC = 0.18
 const MUSIC_OUTPUT_OWNER_STORAGE_KEY = 'doorclub:music-output-owner'
 const MUSIC_OUTPUT_OWNER_CHANNEL = 'doorclub:music-output-owner'
 const MUSIC_OUTPUT_OWNER_TTL_MS = 7_000
@@ -560,6 +561,7 @@ type MusicOutputOwnerRecord = {
 let _djRoom: Room | null = null
 let _djSource: MediaStreamAudioSourceNode | null = null
 let _djGain: GainNode | null = null
+let _djDelay: DelayNode | null = null
 let _djDoorEq: DoorEqGraph | null = null
 let _djBpmAnalyser: AnalyserNode | null = null
 let _djBpmEstimator: LiveBpmEstimator | null = null
@@ -2246,12 +2248,15 @@ function attachDjTrack(track: RemoteAudioTrack) {
     _djMediaStreamTrack = mediaStreamTrack
     _djGain = ctx.createGain()
     _djGain.gain.value = 0
+    _djDelay = ctx.createDelay(0.5)
+    _djDelay.delayTime.value = DJ_STREAM_BUFFER_SEC
     _djLockscreenOutput = ctx.createMediaStreamDestination()
     _djBpmAnalyser = createBpmAnalyser(ctx)
     _djBpmEstimator = new LiveBpmEstimator(_djBpmAnalyser)
     _djSource = ctx.createMediaStreamSource(new MediaStream([mediaStreamTrack]))
     _djSource.connect(_djDoorEq.nodes[0])
-    connectNodeChain(_djDoorEq.nodes, _djGain)
+    connectNodeChain(_djDoorEq.nodes, _djDelay)
+    _djDelay.connect(_djGain)
     _djGain.connect(_djLockscreenOutput)
     _djSource.connect(_djBpmAnalyser)
   } else {
@@ -2290,11 +2295,13 @@ function detachDjTrack(updateState = true) {
   safeDisconnectNode(_djSource)
   disconnectDjSpeaker()
   _djDoorEq?.nodes.forEach(safeDisconnectNode)
+  safeDisconnectNode(_djDelay)
   safeDisconnectNode(_djGain)
   safeDisconnectNode(_djLockscreenOutput)
   safeDisconnectNode(_djBpmAnalyser)
   _djSource = null
   _djDoorEq = null
+  _djDelay = null
   _djGain = null
   _djLockscreenOutput = null
   _djBpmAnalyser = null

@@ -198,7 +198,7 @@ export interface GameplayState {
 }
 
 interface Callbacks {
-  onWelcome:        (myId: string, players: RemotePlayer[], myX?: number, myZ?: number, role?: string, queue?: QueueEntry[], cooldownUntil?: number, gameplay?: GameplayState, myFloorLevel?: RemotePlayer['floorLevel']) => void
+  onWelcome:        (myId: string, players: RemotePlayer[], myX?: number, myZ?: number, role?: string, queue?: QueueEntry[], cooldownUntil?: number, gameplay?: GameplayState, myFloorLevel?: RemotePlayer['floorLevel'], resumed?: boolean) => void
   onPlayerJoined:   (player: RemotePlayer) => void
   onPlayerMoved:    (id: string, x: number, z: number, rotY: number, moving: boolean, musicDanceIntensity?: number, floorLevel?: RemotePlayer['floorLevel']) => void
   onSelfPosition?:  (x: number, z: number, rotY: number, moving: boolean, musicDanceIntensity?: number, floorLevel?: RemotePlayer['floorLevel']) => void
@@ -396,7 +396,7 @@ class GameClient {
             if (typeof msg.musicTrackIdx === 'number') {
               dispatchMusicSync(msg.musicTrackIdx, msg.musicStartedAt, msg.musicServerNow, clientReceivedAt, msg.musicState)
             }
-            cb.onWelcome(msg.id, msg.players, msg.myX ?? 0, msg.myZ ?? 6, msg.role, msg.queue, msg.cooldownUntil, msg.gameplay, msg.myFloorLevel)
+            cb.onWelcome(msg.id, msg.players, msg.myX ?? 0, msg.myZ ?? 6, msg.role, msg.queue, msg.cooldownUntil, msg.gameplay, msg.myFloorLevel, Boolean(msg.resumed))
             break
           case 'playerJoined':   cb.onPlayerJoined(msg.player); break
           case 'playerMoved':    cb.onPlayerMoved(msg.id, msg.x, msg.z, msg.rotY, msg.moving, msg.musicDanceIntensity, msg.floorLevel); break

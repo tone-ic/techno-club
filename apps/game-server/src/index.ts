@@ -16,6 +16,7 @@ interface Player {
   userId: string
   economyKey: string
   accountKey: string
+  clientSessionId: string
   ws: WebSocket
   room: 'outside' | 'club'
   displayName: string
@@ -287,6 +288,14 @@ function closeExistingSessions(accountKey: string, nextPlayerId: string) {
   })
 
   return handoff
+}
+
+function findResumableSession(clientSessionId: string, room: Player['room']) {
+  if (!clientSessionId) return null
+  return Array.from(players.values()).find(player => (
+    player.clientSessionId === clientSessionId &&
+    player.room === room
+  )) ?? null
 }
 
 function removePlayerSession(player: Player, reason: 'closed' | 'replaced' = 'closed') {
@@ -1261,6 +1270,41 @@ function sendGameplayState(player: Player) {
   })
 }
 
+function sendWelcome(player: Player, resumed = false) {
+  const others = Array.from(players.values())
+    .filter(p => p.id !== player.id && p.room === player.room)
+    .map(p => ({
+      id: p.id, displayName: p.displayName, role: p.role, djName: p.djName,
+      topColor: p.topColor, bottomColor: p.bottomColor,
+      hairColor: p.hairColor, skinTone: p.skinTone,
+      faceTextureUrl: p.faceTextureUrl, bodyTextureUrl: p.bodyTextureUrl,
+      modelUrl: p.modelUrl,
+      x: p.x, z: p.z, floorLevel: p.floorLevel, rotY: p.rotY, moving: p.moving, musicDanceIntensity: p.musicDanceIntensity,
+    }))
+  const welcomeMusicState = currentMusicState()
+
+  player.ws.send(JSON.stringify({
+    type: 'welcome',
+    protocolVersion: SERVER_PROTOCOL_VERSION,
+    room: player.room,
+    resumed,
+    id: player.id,
+    myX: player.x,
+    myZ: player.z,
+    myFloorLevel: player.floorLevel,
+    role: player.role,
+    players: others,
+    queue: queueSnapshot(),
+    cooldownUntil: player.cooldownUntil,
+    musicSource,
+    musicTrackIdx,
+    musicTrackCount,
+    musicStartedAt: welcomeMusicState.startedAt,
+    musicServerNow: welcomeMusicState.serverNow,
+    musicState: welcomeMusicState,
+  }))
+}
+
 function broadcastGameplayState() {
   players.forEach(player => {
     if (player.ws.readyState === WebSocket.OPEN) sendGameplayState(player)
@@ -1489,6 +1533,10 @@ wss.on('connection', (ws) => {
   ws.on('message', async (raw) => {
     let msg: any
     try { msg = JSON.parse(raw.toString()) } catch { return }
+    if (msg.type !== 'join' && playerId) {
+      const currentPlayer = players.get(playerId)
+      if (!currentPlayer || currentPlayer.ws !== ws) return
+    }
 
     if (msg.type === 'join') {
       playerId = `p${nextId++}`
@@ -1501,6 +1549,49 @@ wss.on('connection', (ws) => {
       const accountKey = accountKeyFor(requestedEmail, requestedUserId, clientSessionId, playerId)
       const persistedState = requestedUserId ? await loadPlayerPersistence(economyKey) : null
       applyPersistedPlayerState(economyKey, persistedState)
+      const resumedSession = findResumableSession(clientSessionId, room)
+      if (resumedSession) {
+        const previousWs = resumedSession.ws
+        playerId = resumedSession.id
+        cancelDisconnectedSessionCleanup(resumedSession.id)
+        resumedSession.ws = ws
+        resumedSession.displayName = msg.displayName || resumedSession.displayName
+        resumedSession.topColor = msg.topColor || resumedSession.topColor
+        resumedSession.bottomColor = msg.bottomColor || resumedSession.bottomColor
+        resumedSession.hairColor = msg.hairColor || resumedSession.hairColor
+        resumedSession.skinTone = msg.skinTone || resumedSession.skinTone
+        resumedSession.faceTextureUrl = msg.faceTextureUrl || resumedSession.faceTextureUrl
+        resumedSession.bodyTextureUrl = msg.bodyTextureUrl || resumedSession.bodyTextureUrl
+        resumedSession.modelUrl = typeof msg.modelUrl === 'string' ? msg.modelUrl : resumedSession.modelUrl
+        if (resumedSession.role === 'dj') {
+          resumedSession.djName = String(msg.djName || resumedSession.djName || resumedSession.displayName || 'DJ').trim().slice(0, 24)
+          ensureDjScheduleItem(resumedSession, true)
+        }
+        if (CLUB_ROLE_SLOTS.includes(resumedSession.role as ClubRole)) {
+          roleSlots[resumedSession.role as ClubRole] = resumedSession.id
+        }
+        if (
+          persistedVipAccess.get(resumedSession.economyKey) ||
+          resumedSession.role === 'vip' ||
+          resumedSession.role === 'owner' ||
+          resumedSession.role === 'admin'
+        ) {
+          vipGuests.add(resumedSession.id)
+        }
+        console.log(`[~] ${resumedSession.id} (${resumedSession.displayName}) resumed room=${resumedSession.room} role=${resumedSession.role}. Total: ${players.size}`)
+        sendWelcome(resumedSession, true)
+        sendGameplayState(resumedSession)
+        sendDjSchedule(resumedSession)
+        if (resumedSession.role === 'dj') broadcastDjSchedule()
+        if (previousWs !== ws && previousWs.readyState === WebSocket.OPEN) {
+          try {
+            previousWs.close(4000, 'resumed by newer connection')
+          } catch {
+            previousWs.close()
+          }
+        }
+        return
+      }
       const handoff = closeExistingSessions(accountKey, playerId)
       const authorizedRole = authorizedJoinRole(economyKey, requestedUserId, persistedState, handoff)
       const joinRole = roleIsAvailable(authorizedRole, playerId, requestedUserId) ? authorizedRole : 'guest'
@@ -1510,7 +1601,7 @@ wss.on('connection', (ws) => {
           ? BAR_WORK_SPAWN
           : findSpawnPos(room)
       const player: Player = {
-        id: playerId, userId: requestedUserId, economyKey, accountKey, ws, room,
+        id: playerId, userId: requestedUserId, economyKey, accountKey, clientSessionId, ws, room,
         displayName:    msg.displayName    || 'Аноним',
         topColor:       msg.topColor       || '#222244',
         bottomColor:    msg.bottomColor    || '#111133',
@@ -1564,37 +1655,7 @@ wss.on('connection', (ws) => {
       persistPlayerState(player)
       console.log(`[+] ${playerId} (${player.displayName}) room=${player.room} role=${player.role}. Total: ${players.size}`)
 
-      const others = Array.from(players.values())
-        .filter(p => p.id !== playerId && p.room === room)
-        .map(p => ({
-          id: p.id, displayName: p.displayName, role: p.role, djName: p.djName,
-          topColor: p.topColor, bottomColor: p.bottomColor,
-          hairColor: p.hairColor, skinTone: p.skinTone,
-          faceTextureUrl: p.faceTextureUrl, bodyTextureUrl: p.bodyTextureUrl,
-          modelUrl: p.modelUrl,
-          x: p.x, z: p.z, floorLevel: p.floorLevel, rotY: p.rotY, moving: p.moving, musicDanceIntensity: p.musicDanceIntensity,
-        }))
-      const welcomeMusicState = currentMusicState()
-
-      ws.send(JSON.stringify({
-        type: 'welcome',
-        protocolVersion: SERVER_PROTOCOL_VERSION,
-        room: player.room,
-        id: playerId,
-        myX: player.x,
-        myZ: player.z,
-        myFloorLevel: player.floorLevel,
-        role: player.role,
-        players: others,
-        queue: queueSnapshot(),
-        cooldownUntil: player.cooldownUntil,
-        musicSource,
-        musicTrackIdx,
-        musicTrackCount,
-        musicStartedAt: welcomeMusicState.startedAt,
-        musicServerNow: welcomeMusicState.serverNow,
-        musicState: welcomeMusicState,
-      }))
+      sendWelcome(player)
 
       broadcast({
         type: 'playerJoined',
@@ -2254,7 +2315,7 @@ wss.on('connection', (ws) => {
     if (playerId) {
       const closedPlayerId = playerId
       const p = players.get(closedPlayerId)
-      if (p) {
+      if (p && p.ws === ws) {
         cancelDisconnectedSessionCleanup(closedPlayerId)
         const timer = setTimeout(() => {
           disconnectedSessionTimers.delete(closedPlayerId)

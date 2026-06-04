@@ -2853,9 +2853,9 @@ export default function ClubPage() {
     let cancelled = false
 
     gameClient.setCallbacks({
-      onWelcome: (id, players, myX, myZ, role, queue, _cooldownUntil, gameplay, myFloorLevel) => {
+      onWelcome: (id, players, myX, myZ, role, queue, _cooldownUntil, gameplay, myFloorLevel, resumed) => {
         setMyPlayerId(id)
-        if (myX !== undefined && myZ !== undefined) teleportFn.current(myX, myZ, myFloorLevel)
+        if (!resumed && myX !== undefined && myZ !== undefined) teleportFn.current(myX, myZ, myFloorLevel)
         players.forEach((p) => spawnFn.current(p))
         setPlayerCount(players.length + 1)
         if (role) usePlayerStore.getState().setRole(role as any)

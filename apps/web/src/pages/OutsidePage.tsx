@@ -1199,9 +1199,9 @@ export default function OutsidePage() {
     let cancelled = false
 
     gameClient.setCallbacks({
-      onWelcome: (id,players,myX,myZ,role,q,cooldown,gameplay) => {
+      onWelcome: (id,players,myX,myZ,role,q,cooldown,gameplay,_myFloorLevel,resumed) => {
         setMyPlayerId(id)
-        if(myX!==undefined&&myZ!==undefined) teleportFn.current(myX,myZ)
+        if(!resumed&&myX!==undefined&&myZ!==undefined) teleportFn.current(myX,myZ)
         players.forEach(p=>spawnFn.current(p))
         setPlayerCount(players.length+1)
         if(role) {
