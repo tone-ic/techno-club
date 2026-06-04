@@ -62,6 +62,7 @@ interface PlayerSessionHandoff {
   cooldownUntil: number
   insideClub: boolean
   djName: string
+  djStreamActive: boolean
 }
 
 type ManagementAction =
@@ -199,6 +200,7 @@ const MUSIC_SCAN_INTERVAL_MS = 5_000
 const MUSIC_STATE_BROADCAST_MS = 250
 const MUSIC_FALLBACK_BPM = 124
 const MUSIC_BPM_ANALYSIS_CONCURRENCY = 2
+const DISCONNECTED_SESSION_GRACE_MS = 5 * 60_000
 const MUSIC_DIR_CANDIDATES = [
   path.resolve(process.cwd(), 'apps/web/public/music'),
   path.resolve(process.cwd(), '../web/public/music'),
@@ -220,6 +222,7 @@ let djStreamStartedAt = 0
 let djStreamPlayerId: string | null = null
 let djStreamName = ''
 const musicDurationsSec = new Map<number, number>()
+const disconnectedSessionTimers = new Map<string, NodeJS.Timeout>()
 
 setInterval(() => {
   refreshMusicTrackState()
@@ -257,7 +260,15 @@ function createPlayerSessionHandoff(player: Player): PlayerSessionHandoff {
     cooldownUntil: player.cooldownUntil,
     insideClub: player.insideClub,
     djName: player.djName,
+    djStreamActive: musicSource === 'dj' && djStreamPlayerId === player.id,
   }
+}
+
+function cancelDisconnectedSessionCleanup(playerId: string) {
+  const timer = disconnectedSessionTimers.get(playerId)
+  if (!timer) return
+  clearTimeout(timer)
+  disconnectedSessionTimers.delete(playerId)
 }
 
 function closeExistingSessions(accountKey: string, nextPlayerId: string) {
@@ -267,6 +278,7 @@ function closeExistingSessions(accountKey: string, nextPlayerId: string) {
   let handoff: PlayerSessionHandoff | null = null
   staleSessions.forEach((player) => {
     if (!handoff) handoff = createPlayerSessionHandoff(player)
+    cancelDisconnectedSessionCleanup(player.id)
     removePlayerSession(player, 'replaced')
   })
 
@@ -275,6 +287,7 @@ function closeExistingSessions(accountKey: string, nextPlayerId: string) {
 
 function removePlayerSession(player: Player, reason: 'closed' | 'replaced' = 'closed') {
   const playerId = player.id
+  cancelDisconnectedSessionCleanup(playerId)
 
   if (player.inQueue) {
     const idx = queue.indexOf(playerId)
@@ -341,9 +354,15 @@ function normalizeAccountEmail(value: unknown) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : ''
 }
 
-function accountKeyFor(email: string, userId: string, playerId: string) {
+function normalizeClientSessionId(value: unknown) {
+  const id = typeof value === 'string' ? value.trim() : ''
+  return /^[a-zA-Z0-9:_-]{8,128}$/.test(id) ? id : ''
+}
+
+function accountKeyFor(email: string, userId: string, clientSessionId: string, playerId: string) {
   if (email) return `email:${email}`
   if (userId) return `user:${userId}`
+  if (clientSessionId) return `session:${clientSessionId}`
   return `session:${playerId}`
 }
 
@@ -867,7 +886,6 @@ function setPlayerClubles(player: Player, balance: number) {
 }
 
 function rememberPlayerRole(player: Player, role = player.role) {
-  if (!player.userId) return
   playerRoles.set(player.economyKey, role)
   persistPlayerState(player)
 }
@@ -878,7 +896,6 @@ function authorizedJoinRole(
   persistedState: PersistedPlayerState | null,
   handoff: PlayerSessionHandoff | null,
 ) {
-  if (!userId) return 'guest'
   const rememberedRole = playerRoles.get(economyKey)
   if (rememberedRole) return rememberedRole
   if (persistedState) return persistedState.role
@@ -1473,8 +1490,10 @@ wss.on('connection', (ws) => {
       const room: 'outside' | 'club' = msg.room === 'club' ? 'club' : 'outside'
       const requestedUserId = typeof msg.userId === 'string' ? msg.userId : ''
       const requestedEmail = normalizeAccountEmail(msg.email)
-      const economyKey = requestedUserId || playerId
-      const accountKey = accountKeyFor(requestedEmail, requestedUserId, playerId)
+      const clientSessionId = normalizeClientSessionId(msg.clientSessionId)
+      const anonymousSessionKey = clientSessionId ? `session:${clientSessionId}` : ''
+      const economyKey = requestedUserId || anonymousSessionKey || playerId
+      const accountKey = accountKeyFor(requestedEmail, requestedUserId, clientSessionId, playerId)
       const persistedState = requestedUserId ? await loadPlayerPersistence(economyKey) : null
       applyPersistedPlayerState(economyKey, persistedState)
       const handoff = closeExistingSessions(accountKey, playerId)
@@ -1533,7 +1552,10 @@ wss.on('connection', (ws) => {
       }
       if (CLUB_ROLE_SLOTS.includes(player.role as ClubRole)) roleSlots[player.role as ClubRole] = playerId
       if (persistedVipAccess.get(player.economyKey) || player.role === 'vip' || player.role === 'owner' || player.role === 'admin') vipGuests.add(playerId)
-      if (player.role === 'dj') ensureDjScheduleItem(player, true)
+      if (player.role === 'dj') {
+        ensureDjScheduleItem(player, true)
+        if (handoff?.djStreamActive) setDjMusicSource(player)
+      }
       persistPlayerState(player)
       console.log(`[+] ${playerId} (${player.displayName}) room=${player.room} role=${player.role}. Total: ${players.size}`)
 
@@ -2225,8 +2247,17 @@ wss.on('connection', (ws) => {
 
   ws.on('close', () => {
     if (playerId) {
-      const p = players.get(playerId)
-      if (p) removePlayerSession(p)
+      const closedPlayerId = playerId
+      const p = players.get(closedPlayerId)
+      if (p) {
+        cancelDisconnectedSessionCleanup(closedPlayerId)
+        const timer = setTimeout(() => {
+          disconnectedSessionTimers.delete(closedPlayerId)
+          const stale = players.get(closedPlayerId)
+          if (stale && stale.ws.readyState !== WebSocket.OPEN) removePlayerSession(stale)
+        }, DISCONNECTED_SESSION_GRACE_MS)
+        disconnectedSessionTimers.set(closedPlayerId, timer)
+      }
     }
   })
 

@@ -1882,22 +1882,29 @@ function dispatchDjState(active: boolean) {
   dispatchMusicOutput()
 }
 
+function currentLiveDjBpm(estimator = _djBpmEstimator) {
+  if (!shouldUseDjOutput()) return null
+  if (!estimator?.bpm || estimator.confidence < LIVE_BPM_MIN_CONFIDENCE) return null
+  return Math.round(clamp(estimator.reportedBpm ?? estimator.bpm, BPM_MIN, BPM_MAX) * 10) / 10
+}
+
 function currentMusicBpm(serverState = currentServerMusicState()) {
+  const liveDjBpm = currentLiveDjBpm()
+  if (liveDjBpm !== null) {
+    _lastKnownBpm = liveDjBpm
+    return liveDjBpm
+  }
+
   const authoritativeState = currentAuthoritativeMusicState()
   if (authoritativeState?.source === 'dj') {
-    _lastKnownBpm = Math.round(clamp(authoritativeState.bpm, BPM_MIN, BPM_MAX) * 10) / 10
+    const sourcePlaying = Boolean(_djTrack || _djMediaStreamTrack || (_djElement && !_djElement.paused))
+    if (!sourcePlaying) return null
     return _lastKnownBpm
   }
 
   const useDjOutput = shouldUseDjOutput()
   if (!useDjOutput && serverState) {
     _lastKnownBpm = Math.round(clamp(serverState.bpm, BPM_MIN, BPM_MAX) * 10) / 10
-    return _lastKnownBpm
-  }
-
-  const estimator = useDjOutput ? _djBpmEstimator : null
-  if (estimator?.bpm && estimator.confidence >= LIVE_BPM_MIN_CONFIDENCE) {
-    _lastKnownBpm = Math.round(clamp(estimator.reportedBpm ?? estimator.bpm, BPM_MIN, BPM_MAX) * 10) / 10
     return _lastKnownBpm
   }
 
@@ -1913,6 +1920,8 @@ function dispatchMusicBpm() {
   const serverDjState = authoritativeState?.source === 'dj' ? authoritativeState : null
   const useDjOutput = shouldUseDjOutput()
   const estimator = useDjOutput ? _djBpmEstimator : null
+  const liveDjBpm = currentLiveDjBpm(estimator)
+  const useLiveDjBpm = liveDjBpm !== null
   const ctx = _ctx
   const serverState = currentServerMusicState()
   const bpm = currentMusicBpm(serverState)
@@ -1931,10 +1940,12 @@ function dispatchMusicBpm() {
       bpm,
       trackIdx: serverDjState ? serverDjState.trackIdx : serverState && !useDjOutput ? serverState.trackIdx : _currentTrackIdx,
       source: serverDjState ? 'dj' : 'track',
-      bpmSource: serverDjState ? serverDjState.bpmSource ?? 'fallback' : useDjOutput ? 'live' : serverState?.bpmSource ?? 'fallback',
-      confidence: serverDjState ? serverDjState.bpmConfidence ?? 0 : useDjOutput ? estimator?.confidence ?? 0 : serverState?.bpmConfidence ?? 0,
-      beatAtMs: serverDjState ? serverDjBeatAtMs ?? liveBeatAtMs : useDjOutput ? liveBeatAtMs : serverBeatAtMs,
-      beatIntervalSec: serverDjState?.beatIntervalMs
+      bpmSource: useLiveDjBpm ? 'live' : serverDjState ? serverDjState.bpmSource ?? 'fallback' : useDjOutput ? 'live' : serverState?.bpmSource ?? 'fallback',
+      confidence: useLiveDjBpm ? estimator?.confidence ?? 0 : serverDjState ? serverDjState.bpmConfidence ?? 0 : useDjOutput ? estimator?.confidence ?? 0 : serverState?.bpmConfidence ?? 0,
+      beatAtMs: useLiveDjBpm ? liveBeatAtMs : serverDjState ? serverDjBeatAtMs : useDjOutput ? liveBeatAtMs : serverBeatAtMs,
+      beatIntervalSec: useLiveDjBpm
+        ? estimator?.beatIntervalSec ?? (bpm ? 60 / bpm : null)
+        : serverDjState?.beatIntervalMs
         ? serverDjState.beatIntervalMs / 1000
         : useDjOutput
         ? estimator?.beatIntervalSec ?? (bpm ? 60 / bpm : null)
@@ -2100,18 +2111,24 @@ function applyOutputState() {
 
   applyEqState(_doorEq, isOutside, doorLeak, now)
 
+  const useNativeDjElement = Boolean(useDjOutput && _djElement && !_djElement.paused && _lockscreenSource !== 'dj')
   if (_djGain) {
+    const djGainTarget = outputBlocked || !useDjOutput || useNativeDjElement ? 0 : _volume * environmentGain
     _djGain.gain.cancelScheduledValues(now)
     _djGain.gain.setValueAtTime(_djGain.gain.value, now)
-    _djGain.gain.linearRampToValueAtTime(outputBlocked || !useDjOutput ? 0 : _volume * environmentGain, now + 0.08)
+    _djGain.gain.linearRampToValueAtTime(djGainTarget, now + 0.08)
+    if (djGainTarget > 0) connectDjSpeaker()
+    else disconnectDjSpeaker()
   }
   applyEqState(_djDoorEq, isOutside, doorLeak, now)
 
   const djVolume = getDjOutputVolume()
-  _djTrack?.setVolume(outputBlocked || !useDjOutput || _djGain ? 0 : _lockscreenSource === 'dj' ? 0 : djVolume)
+  _djTrack?.setVolume(_djElement ? 1 : outputBlocked || !useDjOutput || _djGain ? 0 : _lockscreenSource === 'dj' ? 0 : djVolume)
   if (_djElement) {
-    _djElement.muted = true
-    _djElement.volume = 0
+    const nativeDjActive = !outputBlocked && useDjOutput && _lockscreenSource !== 'dj'
+    _djElement.muted = !nativeDjActive
+    _djElement.volume = nativeDjActive ? djVolume : 0
+    if (!nativeDjActive && !_djElement.paused) _djElement.pause()
   }
   if (_lockscreenAudio) {
     const trackLockscreenActive = _lockscreenActive && _lockscreenSource === 'track'
@@ -2185,22 +2202,18 @@ async function startDjAudioElement() {
     return
   }
   await _djRoom?.startAudio().catch(() => undefined)
-  _djElement.muted = true
-  _djElement.volume = 0
-  _djElement.pause()
-  if (_djMediaStreamTrack && _djGain) {
-    _djPlaybackReady = isAudioContextRunning(_ctx)
-    _djPlaybackBlocked = !_djPlaybackReady
-  } else {
-    try {
-      await _djElement.play()
-      _djPlaybackReady = true
-      _djPlaybackBlocked = false
-    } catch {
-      _djPlaybackReady = false
-      _djPlaybackBlocked = true
-    }
+  _djElement.muted = false
+  _djElement.volume = getDjOutputVolume()
+  try {
+    await _djElement.play()
+    _djPlaybackReady = true
+    _djPlaybackBlocked = false
+  } catch {
+    const webAudioReady = Boolean(_djMediaStreamTrack && _djGain && isAudioContextRunning(_ctx))
+    _djPlaybackReady = webAudioReady
+    _djPlaybackBlocked = !webAudioReady
   }
+  applyOutputState()
   dispatchDjState(_djActive)
 }
 
@@ -2218,7 +2231,7 @@ function attachDjTrack(track: RemoteAudioTrack) {
   _djElement.volume = 0
   _djElement.style.display = 'none'
   document.body.appendChild(_djElement)
-  track.setVolume(0)
+  track.setVolume(1)
   track.start()
 
   const attachedStream = _djElement.srcObject instanceof MediaStream ? _djElement.srcObject : null
@@ -2234,7 +2247,6 @@ function attachDjTrack(track: RemoteAudioTrack) {
     _djSource.connect(_djDoorEq.nodes[0])
     connectNodeChain(_djDoorEq.nodes, _djGain)
     _djGain.connect(_djLockscreenOutput)
-    connectDjSpeaker()
     _djSource.connect(_djBpmAnalyser)
   } else {
     track.setAudioContext(ctx)

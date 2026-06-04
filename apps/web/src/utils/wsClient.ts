@@ -4,6 +4,7 @@ import { resolveRuntimeUrl } from '@/utils/runtimeUrls'
 
 export const GAME_SERVER_STATUS_EVENT = 'game-server-status'
 export const DJ_SCHEDULE_EVENT = 'dj-schedule'
+const CLIENT_SESSION_STORAGE_KEY = 'doorclub-client-session-id'
 
 export interface DjScheduleItem {
   userId: string
@@ -298,6 +299,18 @@ function dispatchDjSchedule(schedule: DjScheduleItem[], serverNow = Date.now()) 
   }))
 }
 
+function getClientSessionId() {
+  try {
+    const existing = window.localStorage.getItem(CLIENT_SESSION_STORAGE_KEY)
+    if (existing) return existing
+    const id = globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+    window.localStorage.setItem(CLIENT_SESSION_STORAGE_KEY, id)
+    return id
+  } catch {
+    return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+  }
+}
+
 class GameClient {
   private ws: WebSocket | null = null
   private callbacks: Callbacks | null = null
@@ -343,7 +356,7 @@ class GameClient {
       this.ws = ws
 
       ws.onopen = () => {
-        ws.send(JSON.stringify({ type: 'join', ...payload }))
+        ws.send(JSON.stringify({ type: 'join', clientSessionId: getClientSessionId(), ...payload }))
         this.sendTimePing()
         dispatchServerStatus({ connected: true, currentRoom: requestedRoom })
         resolve()

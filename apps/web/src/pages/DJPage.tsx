@@ -18,9 +18,9 @@ type DJBoothPanelProps = {
   onMinimize?: () => void
 }
 
-const DJ_AUDIO_PRESET_320 = {
+const DJ_AUDIO_PRESET_DESKTOP = {
   ...AudioPresets.musicHighQualityStereo,
-  maxBitrate: 320_000,
+  maxBitrate: 192_000,
 }
 const DJ_USER_AGENT = typeof navigator === 'undefined' ? '' : navigator.userAgent
 const DJ_IS_IOS = /iPad|iPhone|iPod/i.test(DJ_USER_AGENT) ||
@@ -28,7 +28,7 @@ const DJ_IS_IOS = /iPad|iPhone|iPod/i.test(DJ_USER_AGENT) ||
 const DJ_IS_MOBILE = DJ_IS_IOS || /Android|Mobile/i.test(DJ_USER_AGENT)
 const DJ_AUDIO_PRESET = DJ_IS_MOBILE
   ? { ...AudioPresets.musicHighQuality, maxBitrate: DJ_IS_IOS ? 96_000 : 160_000 }
-  : DJ_AUDIO_PRESET_320
+  : DJ_AUDIO_PRESET_DESKTOP
 const DJ_CAPTURE_CONSTRAINTS: MediaTrackConstraints = DJ_IS_MOBILE
   ? {
       echoCancellation: false,
@@ -53,6 +53,8 @@ export function DJBoothPanel({ embedded = false, onMinimize }: DJBoothPanelProps
   const audioSessionReleaseRef = useRef<(() => void) | null>(null)
   const rafRef = useRef<number | null>(null)
   const startingRef = useRef(false)
+  const desiredBroadcastRef = useRef(false)
+  const reconnectTimerRef = useRef<number | null>(null)
 
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([])
   const [deviceId, setDeviceId] = useState('')
@@ -98,7 +100,10 @@ export function DJBoothPanel({ embedded = false, onMinimize }: DJBoothPanelProps
   useEffect(() => {
     loadDevices()
     return () => {
-      stopBroadcast()
+      desiredBroadcastRef.current = false
+      if (reconnectTimerRef.current !== null) window.clearTimeout(reconnectTimerRef.current)
+      reconnectTimerRef.current = null
+      stopBroadcast({ notifyServer: false })
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadDevices])
@@ -115,6 +120,23 @@ export function DJBoothPanel({ embedded = false, onMinimize }: DJBoothPanelProps
       window.clearInterval(timer)
       window.removeEventListener(DJ_SCHEDULE_EVENT, onSchedule)
     }
+  }, [])
+
+  useEffect(() => {
+    const restartWhenVisible = () => {
+      if (document.visibilityState !== 'visible') return
+      if (!desiredBroadcastRef.current || roomRef.current || startingRef.current) return
+      scheduleBroadcastReconnect(0)
+    }
+    window.addEventListener('focus', restartWhenVisible)
+    window.addEventListener('pageshow', restartWhenVisible)
+    document.addEventListener('visibilitychange', restartWhenVisible)
+    return () => {
+      window.removeEventListener('focus', restartWhenVisible)
+      window.removeEventListener('pageshow', restartWhenVisible)
+      document.removeEventListener('visibilitychange', restartWhenVisible)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const startMeter = (mediaTrack: MediaStreamTrack) => {
@@ -150,8 +172,19 @@ export function DJBoothPanel({ embedded = false, onMinimize }: DJBoothPanelProps
     setLevel(0)
   }
 
+  const scheduleBroadcastReconnect = (delayMs = 1_200) => {
+    if (reconnectTimerRef.current !== null) window.clearTimeout(reconnectTimerRef.current)
+    reconnectTimerRef.current = window.setTimeout(() => {
+      reconnectTimerRef.current = null
+      if (!desiredBroadcastRef.current || roomRef.current || startingRef.current) return
+      if (document.visibilityState !== 'visible') return
+      void startBroadcast()
+    }, delayMs)
+  }
+
   const startBroadcast = async () => {
     if (startingRef.current || roomRef.current) return
+    desiredBroadcastRef.current = true
     startingRef.current = true
     setError('')
     setStatus('connecting')
@@ -176,11 +209,15 @@ export function DJBoothPanel({ embedded = false, onMinimize }: DJBoothPanelProps
         if (roomRef.current === room) roomRef.current = null
         trackRef.current = null
         startingRef.current = false
-        gameClient.setDjStreamLive(false)
         setConnection(ConnectionState.Disconnected)
         setListenerCount(0)
-        setStatus('idle')
         stopMeter()
+        if (desiredBroadcastRef.current) {
+          setStatus('connecting')
+          scheduleBroadcastReconnect(document.visibilityState === 'visible' ? 1_200 : 0)
+        } else {
+          setStatus('idle')
+        }
       })
 
       await room.connect(url, token, {
@@ -204,7 +241,7 @@ export function DJBoothPanel({ embedded = false, onMinimize }: DJBoothPanelProps
         name: 'dj_audio',
         source: Track.Source.Microphone,
         audioPreset: DJ_AUDIO_PRESET,
-        dtx: DJ_IS_IOS,
+        dtx: false,
         red: !DJ_IS_IOS,
         forceStereo: !DJ_IS_MOBILE,
         stream: 'dj',
@@ -215,7 +252,7 @@ export function DJBoothPanel({ embedded = false, onMinimize }: DJBoothPanelProps
       setStatus('live')
     } catch (e: any) {
       pendingAudioSessionRelease?.()
-      await stopBroadcast()
+      await stopBroadcast({ notifyServer: false })
       setStatus('error')
       const message = e?.message || 'Не удалось запустить DJ stream'
       setError(liveKitUrl
@@ -226,7 +263,10 @@ export function DJBoothPanel({ embedded = false, onMinimize }: DJBoothPanelProps
     }
   }
 
-  const stopBroadcast = async () => {
+  const stopBroadcast = async ({ notifyServer = true }: { notifyServer?: boolean } = {}) => {
+    if (notifyServer) desiredBroadcastRef.current = false
+    if (reconnectTimerRef.current !== null) window.clearTimeout(reconnectTimerRef.current)
+    reconnectTimerRef.current = null
     stopMeter()
     const track = trackRef.current
     const room = roomRef.current
@@ -241,11 +281,16 @@ export function DJBoothPanel({ embedded = false, onMinimize }: DJBoothPanelProps
     }
     track?.stop()
     await room?.disconnect().catch(() => undefined)
-    gameClient.setDjStreamLive(false)
+    if (notifyServer) gameClient.setDjStreamLive(false)
     releaseAudioSession?.()
     setConnection(ConnectionState.Disconnected)
     setListenerCount(0)
     setStatus('idle')
+  }
+
+  const handleStopBroadcast = () => {
+    desiredBroadcastRef.current = false
+    void stopBroadcast({ notifyServer: true })
   }
 
   const live = status === 'live'
@@ -366,7 +411,7 @@ export function DJBoothPanel({ embedded = false, onMinimize }: DJBoothPanelProps
                 {busy ? 'ПОДКЛЮЧЕНИЕ...' : 'НАЧАТЬ ЭФИР'}
               </button>
             ) : (
-              <button onClick={stopBroadcast} style={stopButton}>
+              <button onClick={handleStopBroadcast} style={stopButton}>
                 ОСТАНОВИТЬ ЭФИР
               </button>
             )}
