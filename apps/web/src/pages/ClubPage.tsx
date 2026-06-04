@@ -109,6 +109,22 @@ function writeStoredClubPosition(x: number, z: number, floorLevel: ClubFloorLeve
   }
 }
 
+function canRoleUseDjBooth(role: string | null | undefined) {
+  return role === 'dj' || role === 'vip' || role === 'owner' || role === 'admin'
+}
+
+function canRoleUseVipMezzanine(role: string | null | undefined) {
+  return (
+    role === 'vip' ||
+    role === 'dj' ||
+    role === 'owner' ||
+    role === 'guard' ||
+    role === 'bartender' ||
+    role === 'bouncer' ||
+    role === 'admin'
+  )
+}
+
 export default function ClubPage() {
   const navigate = useNavigate()
   const { language } = useAppLanguage()
@@ -166,6 +182,7 @@ export default function ClubPage() {
   const musicKickIntensityRef = useRef(0)
   const musicOnsetStrengthRef = useRef(0)
   const languageRef = useRef(language)
+  const roleRef = useRef(role)
   const danceModeRef = useRef(danceMode)
   const selectedDanceRef = useRef<DanceId>(selectedDance)
   const talkingRef = useRef(false)
@@ -183,15 +200,6 @@ export default function ClubPage() {
   const canUseOwnerPanel = admitted && (role === 'owner' || role === 'admin')
   const canUseAdminPanel = admitted && role === 'admin'
   const canUseManagementPanel = canUseSecurityPanel || canUseOwnerPanel || canUseAdminPanel
-  const canUseDjBooth = role === 'dj' || role === 'vip' || role === 'owner' || role === 'admin'
-  const canUseVipMezzanine =
-    role === 'vip' ||
-    role === 'dj' ||
-    role === 'owner' ||
-    role === 'guard' ||
-    role === 'bartender' ||
-    role === 'bouncer' ||
-    role === 'admin'
   const selectedQueueEntry = queue.find((entry) => entry.id === selectedQueueId) ?? null
 
   useEffect(() => {
@@ -271,6 +279,11 @@ export default function ClubPage() {
   useEffect(() => {
     languageRef.current = language
   }, [language])
+
+  useEffect(() => {
+    roleRef.current = role
+    updatePlayerNameRef.current(displayName || 'АНОНИМ')
+  }, [role, displayName])
 
   useEffect(() => {
     crowdEnergyRef.current = clubEnergy
@@ -800,7 +813,7 @@ export default function ClubPage() {
     updateDjBoothNameRef.current = (djName: string) => {
       setNeonSignText(djBoothSign, djName || 'DJ', '#d8c7a0')
     }
-    if (role === 'dj') updateDjBoothNameRef.current(store.djName || store.displayName || 'DJ')
+    if (roleRef.current === 'dj') updateDjBoothNameRef.current(store.djName || store.displayName || 'DJ')
 
     const toHex = (s: string | null | undefined, fallback: number): number => {
       if (!s) return fallback
@@ -1068,7 +1081,7 @@ export default function ClubPage() {
     setShoes(player, toHex(config?.shoesColor, 0x0d0d0d))
     applyFaceTex(player, config?.faceTextureUrl)
     applyBodyTex(player, config?.bodyTextureUrl)
-    if (role !== 'dj') setNameTag(player, store.displayName || 'АНОНИМ')
+    if (roleRef.current !== 'dj') setNameTag(player, store.displayName || 'АНОНИМ')
     if (config?.modelUrl) loadGeneratedAvatarModel(player, config.modelUrl)
 
     const dancerData = [
@@ -1172,8 +1185,10 @@ export default function ClubPage() {
     }
 
     updatePlayerNameRef.current = (displayName) => {
-      if (role === 'dj') {
-        updateDjBoothNameRef.current(displayName || 'DJ')
+      if (roleRef.current === 'dj') {
+        removeNameTag(player)
+        const currentStore = usePlayerStore.getState()
+        updateDjBoothNameRef.current(currentStore.djName || displayName || 'DJ')
         return
       }
       setNameTag(player, displayName)
@@ -1306,8 +1321,6 @@ export default function ClubPage() {
     const pos = new THREE.Vector3(storedClubPosition?.x ?? 0, 0, storedClubPosition?.z ?? 4.8)
     const serverCorrection = { active: false, x: pos.x, z: pos.z }
     let selfFloorLevel: ClubFloorLevel = storedClubPosition?.floorLevel ?? 'ground'
-    const selfCanUseDjBooth = canUseDjBooth
-    const selfCanUseVipMezzanine = canUseVipMezzanine
     let lastStoredPositionAt = 0
     const rememberSelfPosition = (nowMs = performance.now()) => {
       if (nowMs - lastStoredPositionAt < 350) return
@@ -2029,14 +2042,14 @@ export default function ClubPage() {
     }
 
     function hitsSolid(x: number, z: number, targetFloorLevel = resolveClubFloorLevel(selfFloorLevel, x, z)) {
-      if ((targetFloorLevel === 'vip' || targetFloorLevel === 'stairs') && !selfCanUseVipMezzanine) return true
+      if ((targetFloorLevel === 'vip' || targetFloorLevel === 'stairs') && !canRoleUseVipMezzanine(roleRef.current)) return true
       if (selfFloorLevel === 'vip' && targetFloorLevel === 'ground') return true
       if (targetFloorLevel === 'vip' || targetFloorLevel === 'stairs') return false
-      if (!selfCanUseVipMezzanine && isVipMezzanineGroundRestrictedPosition(x, z)) return true
+      if (!canRoleUseVipMezzanine(roleRef.current) && isVipMezzanineGroundRestrictedPosition(x, z)) return true
       if (x > -5.05 && x < 5.05 && z > -7.85 && z < -5.75) return true
       if (x > -7.25 && x < -4.35 && z > -7.45 && z < -6.05) return true
       if (x > 4.35 && x < 7.25 && z > -7.45 && z < -6.05) return true
-      if (z < -7.15 && z > -9.55 && Math.abs(x) < 5.45) return !selfCanUseDjBooth
+      if (z < -7.15 && z > -9.55 && Math.abs(x) < 5.45) return !canRoleUseDjBooth(roleRef.current)
       if (x < -8.6 && z > -3.8 && z < 3.9) return false
       return false
     }
@@ -2845,7 +2858,6 @@ export default function ClubPage() {
     avatarConfig?.shoesColor,
     avatarConfig?.skinTone,
     avatarConfig?.topColor,
-    role,
   ])
 
   useEffect(() => {

@@ -5,7 +5,7 @@ import { supabase } from '@/utils/supabase'
 import { isEmailAuthorizedUser } from '@/utils/emailAuth'
 import { usePlayerStore } from '@/store/playerStore'
 import { DEFAULT_AVATAR_CONFIG } from '@shared/types'
-import type { AvatarConfig } from '@shared/types'
+import type { AvatarConfig, UserRole } from '@shared/types'
 import { lazy, Suspense } from 'react'
 import MusicPlayer from '@/components/MusicPlayer'
 import ScreenWakeLock from '@/components/ScreenWakeLock'
@@ -19,6 +19,8 @@ const ClubPage    = lazy(() => import('@/pages/ClubPage'))
 const BouncerPage = lazy(() => import('@/pages/BouncerPage'))
 const DJPage      = lazy(() => import('@/pages/DJPage'))
 const AdminPage   = lazy(() => import('@/pages/AdminPage'))
+
+const USER_ROLES = new Set<UserRole>(['guest', 'bouncer', 'guard', 'dj', 'bartender', 'light', 'vip', 'owner', 'admin'])
 
 function LoadingScreen() {
   return (
@@ -125,6 +127,16 @@ function firstString(...values: unknown[]) {
   return null
 }
 
+function isUserRole(role: unknown): role is UserRole {
+  return typeof role === 'string' && USER_ROLES.has(role as UserRole)
+}
+
+function shouldApplyProfileRole(profileRole: UserRole) {
+  const { role, status } = usePlayerStore.getState()
+  const admitted = status === 'inside' || sessionStorage.getItem('doorclub-admitted') === '1'
+  return !(admitted && profileRole === 'guest' && role !== 'guest')
+}
+
 function RequireRole({ allowed, children }: { allowed: string[]; children: ReactNode }) {
   const role = usePlayerStore((state) => state.role)
   if (!allowed.includes(role)) return <Navigate to="/outside" replace />
@@ -167,7 +179,7 @@ export default function App() {
 
       const profile = data as any
       if (profile?.display_name && profile.onboarding_completed) setDisplayName(profile.display_name)
-      if (profile?.role) setRole(profile.role)
+      if (isUserRole(profile?.role) && shouldApplyProfileRole(profile.role)) setRole(profile.role)
       setOnboarding({
         ready: true,
         completed: Boolean(profile?.onboarding_completed && profile?.age_confirmed),
