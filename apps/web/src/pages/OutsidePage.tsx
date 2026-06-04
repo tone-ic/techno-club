@@ -3,7 +3,7 @@ import type { CSSProperties, FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { MUSIC_BPM_EVENT, MUSIC_OUTPUT_EVENT } from '@/components/MusicPlayer'
 import AdminDebugOverlay from '@/components/AdminDebugOverlay'
-import AppSettings, { SettingsButton } from '@/components/AppSettings'
+import AppSettings, { SettingsButton, appText, useAppLanguage, type AppLanguage } from '@/components/AppSettings'
 import VoiceChat, { MOVEMENT_INPUT_RESET_EVENT, PROXIMITY_VOICE_POSITIONS_EVENT, VOICE_LEVELS_EVENT, VOICE_TALKING_EVENT } from '@/components/VoiceChat'
 import {
   compressCameraPhoto,
@@ -63,11 +63,11 @@ const STAFF_INVITE_ROLES: Array<{ id: StaffInviteRole; label: string }> = [
   { id: 'vip', label: 'VIP' },
   { id: 'owner', label: 'OWNER' },
 ]
-const STAFF_ERROR_LABELS: Record<string, string> = {
-  password: 'Неверный пароль приглашения',
-  attempts: 'Три неверные попытки. Возврат на стартовую точку',
-  role: 'Неизвестная роль',
-  role_taken: 'Эта роль сейчас занята',
+const STAFF_ERROR_LABELS: Record<string, { ru: string; en: string }> = {
+  password: { ru: 'Неверный пароль приглашения', en: 'Invalid invite password' },
+  attempts: { ru: 'Три неверные попытки. Возврат на стартовую точку', en: 'Three wrong attempts. Returning to the start point' },
+  role: { ru: 'Неизвестная роль', en: 'Unknown role' },
+  role_taken: { ru: 'Эта роль сейчас занята', en: 'This role is currently taken' },
 }
 
 function isFaceControlRole(role: string) {
@@ -124,6 +124,7 @@ function readOutfitCooldownUntil() {
 
 export default function OutsidePage() {
   const navigate  = useNavigate()
+  const { language } = useAppLanguage()
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const displayName = usePlayerStore((s) => s.displayName)
   const clublesBalance = usePlayerStore((s) => s.clublesBalance)
@@ -177,6 +178,7 @@ export default function OutsidePage() {
   const musicBeatSyncRef = useRef<{ beatAtMs: number; beatIntervalSec: number; confidence: number } | null>(null)
   const musicOutputIntensityRef = useRef(0)
   const musicAudibleIntensityRef = useRef(0)
+  const languageRef = useRef(language)
   const talkingRef = useRef(false)
   const voiceLevelRef = useRef(0)
   const remoteVoiceLevelsRef = useRef(new Map<string, number>())
@@ -207,6 +209,10 @@ export default function OutsidePage() {
       usePlayerStore.getState().setLockscreenMusicUntil(event.lockscreenMusicUntil)
     }
   }, [])
+
+  useEffect(() => {
+    languageRef.current = language
+  }, [language])
 
   useEffect(() => {
     staffDoorOpenRef.current = staffDoorOpen
@@ -1223,8 +1229,11 @@ export default function OutsidePage() {
       onQueueLeft:    ()  => setQueueState('idle'),
       onQueueDenied:  (_,cu) => { setQueueState('cooldown'); setCooldownUntil(cu) },
       onQueueUpdate:  q => applyQueue(q),
-      onAdmitted:     ()  => {
-        usePlayerStore.getState().setRole('guest')
+      onAdmitted:     (role)  => {
+        if (role) {
+          setMyRole(role)
+          usePlayerStore.getState().setRole(role as UserRole)
+        }
         usePlayerStore.getState().setStatus('inside')
         sessionStorage.setItem('doorclub-admitted', '1')
         navigate('/club')
@@ -1257,7 +1266,9 @@ export default function OutsidePage() {
       onStaffEntryDenied: (reason, attemptsLeft, exhausted, x, z) => {
         setStaffAttemptsLeft(exhausted ? 3 : attemptsLeft)
         setStaffPassword('')
-        setStaffError(STAFF_ERROR_LABELS[reason] || 'Доступ отклонён')
+        const label = STAFF_ERROR_LABELS[reason]
+        const currentLanguage = languageRef.current
+        setStaffError(label ? appText(currentLanguage, label.ru, label.en) : appText(currentLanguage, 'Доступ отклонён', 'Access denied'))
         if (exhausted) {
           staffDoorOpenRef.current = false
           setStaffDoorOpen(false)
@@ -1313,16 +1324,16 @@ export default function OutsidePage() {
     event.preventDefault()
     const password = staffPassword.trim()
     if (!password) {
-      setStaffError('Введите пароль приглашения')
+      setStaffError(appText(language, 'Введите пароль приглашения', 'Enter invite password'))
       return
     }
     setStaffError('')
     gameClient.staffEntry(staffRole, password)
   }
   const queueLabel = () => {
-    if (queueState==='waiting') return `В ОЧЕРЕДИ #${queuePos}`
-    if (queueState==='cooldown') return `КУЛДАУН ${fmtSecs(cooldownSecs)}`
-    return 'ВСТАТЬ\nВ ОЧЕРЕДЬ'
+    if (queueState==='waiting') return appText(language, `В ОЧЕРЕДИ #${queuePos}`, `IN QUEUE #${queuePos}`)
+    if (queueState==='cooldown') return appText(language, `КУЛДАУН ${fmtSecs(cooldownSecs)}`, `COOLDOWN ${fmtSecs(cooldownSecs)}`)
+    return appText(language, 'ВСТАТЬ\nВ ОЧЕРЕДЬ', 'JOIN\nQUEUE')
   }
   const outfitOnCooldown = outfitCooldownUntil > Date.now()
   const closeOutsideHints = useCallback(() => {
@@ -1406,15 +1417,15 @@ export default function OutsidePage() {
 
   const approveQueueEntry = useCallback((entry: QueueEntry) => {
     gameClient.approve(entry.id)
-    addFaceLog(`Впустил ${entry.displayName}`)
+    addFaceLog(appText(language, `Впустил ${entry.displayName}`, `Admitted ${entry.displayName}`))
     setSelectedQueueId(null)
-  }, [addFaceLog])
+  }, [addFaceLog, language])
 
   const denyQueueEntry = useCallback((entry: QueueEntry, reason: string) => {
     gameClient.deny(entry.id, reason)
-    addFaceLog(`Отказал ${entry.displayName}: ${reason}`)
+    addFaceLog(appText(language, `Отказал ${entry.displayName}: ${reason}`, `Denied ${entry.displayName}: ${reason}`))
     setSelectedQueueId(null)
-  }, [addFaceLog])
+  }, [addFaceLog, language])
 
   const runManagementAction = useCallback((action: string, payload: object = {}) => {
     gameClient.managementAction(action, payload)
@@ -1448,7 +1459,7 @@ export default function OutsidePage() {
 
       <div style={{position:'absolute',top:'calc(env(safe-area-inset-top, 0px) + 10px)',left:12,right:12,display:'flex',alignItems:'center',gap:8,pointerEvents:'none',zIndex:160}}>
         <div style={{minWidth:0,flex:'1 1 auto',background:'rgba(10,9,7,0.82)',border:'1px solid rgba(135,91,45,0.42)',borderRadius:4,padding:'7px 12px',fontFamily:'monospace',fontSize:10,color:'#d8b06f',letterSpacing:2.2,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
-          {CLUB_NAME} &nbsp;—&nbsp; {displayName||'GUEST'} &nbsp;·&nbsp; {clublesBalance} КЛБ &nbsp;·&nbsp; {playerCount} online
+          {CLUB_NAME} &nbsp;-&nbsp; {displayName||'GUEST'} &nbsp;·&nbsp; {clublesBalance} {appText(language, 'КЛБ', 'CLB')} &nbsp;·&nbsp; {playerCount} online
         </div>
         {myRole!=='guest' && myRole!=='bouncer' && (
           <div style={{flex:'0 0 auto',background:'rgba(10,9,7,0.74)',border:'1px solid #333',borderRadius:4,color:'#d8b06f',fontFamily:'monospace',fontSize:9,padding:'7px 9px',maxWidth:124,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
@@ -1459,9 +1470,9 @@ export default function OutsidePage() {
 
       {queueState==='cooldown'&&deniedReason&&(
         <div style={{position:'absolute',top:60,left:'50%',transform:'translateX(-50%)',background:'rgba(40,0,0,0.9)',border:'1px solid #ff4444',borderRadius:6,padding:'10px 20px',fontFamily:'monospace',fontSize:12,color:'#ff6666',textAlign:'center',maxWidth:300}}>
-          <div style={{color:'#ff4444',marginBottom:4}}>ВХОД ОТКЛОНЁН</div>
-          <div style={{color:'#888',fontSize:11}}>{REASON_LABELS[deniedReason]||deniedReason}</div>
-          <div style={{color:'#e040fb',marginTop:6}}>Новая попытка через {fmtSecs(cooldownSecs)}</div>
+          <div style={{color:'#ff4444',marginBottom:4}}>{appText(language, 'ВХОД ОТКЛОНЁН', 'ENTRY DENIED')}</div>
+          <div style={{color:'#888',fontSize:11}}>{reasonLabel(deniedReason, language)}</div>
+          <div style={{color:'#e040fb',marginTop:6}}>{appText(language, 'Новая попытка через', 'Retry in')} {fmtSecs(cooldownSecs)}</div>
         </div>
       )}
 
@@ -1517,6 +1528,7 @@ export default function OutsidePage() {
 
       {canUseManagementPanel && managementPanelOpen && (
         <ManagementPanel
+          language={language}
           role={myRole}
           activeTab={managementTab}
           players={managementPlayers}
@@ -1541,6 +1553,7 @@ export default function OutsidePage() {
           onApprove={approveQueueEntry}
           onDeny={denyQueueEntry}
           onClose={() => setFacePanelOpen(false)}
+          language={language}
         />
       )}
       {canFaceControl && !facePanelOpen && (
@@ -1583,7 +1596,9 @@ export default function OutsidePage() {
           }
         }}
         changeOutfitDisabled={outfitOnCooldown}
-        changeOutfitLabel={outfitOnCooldown ? `Сменить образ через ${fmtSecs(outfitCooldownSecs)}` : 'Сменить образ'}
+        changeOutfitLabel={outfitOnCooldown
+          ? appText(language, `Сменить образ через ${fmtSecs(outfitCooldownSecs)}`, `Change outfit in ${fmtSecs(outfitCooldownSecs)}`)
+          : appText(language, 'Сменить образ', 'Change outfit')}
       />
 
       {showOutfit && (
@@ -1625,6 +1640,7 @@ function StaffEntryModal({
   onSubmit: (event: FormEvent<HTMLFormElement>) => void
   onClose: () => void
 }) {
+  const { language } = useAppLanguage()
   return (
     <div style={staffModalBackdropStyle}>
       <form style={staffModalStyle} onSubmit={onSubmit}>
@@ -1655,7 +1671,7 @@ function StaffEntryModal({
         </div>
 
         <label style={staffInputLabelStyle}>
-          INVITE PASSWORD
+          {appText(language, 'ПАРОЛЬ ПРИГЛАШЕНИЯ', 'INVITE PASSWORD')}
           <input
             type="password"
             value={password}
@@ -1665,47 +1681,51 @@ function StaffEntryModal({
         </label>
 
         <div style={staffModalStatusStyle}>
-          <span>ATTEMPTS: {attemptsLeft}/3</span>
+          <span>{appText(language, 'ПОПЫТКИ', 'ATTEMPTS')}: {attemptsLeft}/3</span>
           {error && <span style={staffModalErrorStyle}>{error}</span>}
         </div>
 
-        <button type="submit" style={staffSubmitButtonStyle}>ENTER CLUB</button>
+        <button type="submit" style={staffSubmitButtonStyle}>{appText(language, 'ВОЙТИ В КЛУБ', 'ENTER CLUB')}</button>
       </form>
     </div>
   )
 }
 
 function OutsideIntroModal({ onDone }: { onDone: () => void }) {
+  const { language } = useAppLanguage()
   return (
     <>
       <div style={outsideIntroBackdropStyle} />
       <div style={outsideIntroCardStyle}>
-        <div style={outsideIntroKickerStyle}>ДОБРО ПОЖАЛОВАТЬ В {CLUB_NAME}</div>
-        <div style={outsideIntroTitleStyle}>Ты у входа в клуб</div>
+        <div style={outsideIntroKickerStyle}>{appText(language, `ДОБРО ПОЖАЛОВАТЬ В ${CLUB_NAME}`, `WELCOME TO ${CLUB_NAME}`)}</div>
+        <div style={outsideIntroTitleStyle}>{appText(language, 'Ты у входа в клуб', 'You are at the club entrance')}</div>
         <div style={outsideIntroTextStyle}>
-          Исследуй улицу, общайся голосом с игроками рядом, вставай в очередь на вход и следи за атмосферой клуба.
-          Здесь можно обновить образ, а роли DJ, facecontrol и охраны открывают дополнительные панели управления.
+          {appText(
+            language,
+            'Исследуй улицу, общайся голосом с игроками рядом, вставай в очередь на вход и следи за атмосферой клуба. Здесь можно обновить образ, а роли DJ, facecontrol и охраны открывают дополнительные панели управления.',
+            'Explore the street, talk by voice with nearby players, join the entry queue, and keep an eye on the club mood. You can refresh your outfit here, while DJ, facecontrol, and security roles unlock extra control panels.'
+          )}
         </div>
         <div style={outsideIntroGridStyle}>
           <div style={outsideIntroItemStyle}>
-            <span style={outsideIntroItemTitleStyle}>ГОЛОС</span>
-            <span>Разговор слышен рядом с твоим персонажем.</span>
+            <span style={outsideIntroItemTitleStyle}>{appText(language, 'ГОЛОС', 'VOICE')}</span>
+            <span>{appText(language, 'Разговор слышен рядом с твоим персонажем.', 'Voice is heard near your character.')}</span>
           </div>
           <div style={outsideIntroItemStyle}>
-            <span style={outsideIntroItemTitleStyle}>ОЧЕРЕДЬ</span>
-            <span>Встань в очередь и дождись решения facecontrol.</span>
+            <span style={outsideIntroItemTitleStyle}>{appText(language, 'ОЧЕРЕДЬ', 'QUEUE')}</span>
+            <span>{appText(language, 'Встань в очередь и дождись решения facecontrol.', 'Join the queue and wait for facecontrol.')}</span>
           </div>
           <div style={outsideIntroItemStyle}>
-            <span style={outsideIntroItemTitleStyle}>ОБРАЗ</span>
-            <span>Меняй внешний вид с коротким кулдауном.</span>
+            <span style={outsideIntroItemTitleStyle}>{appText(language, 'ОБРАЗ', 'OUTFIT')}</span>
+            <span>{appText(language, 'Меняй внешний вид с коротким кулдауном.', 'Change your look after a short cooldown.')}</span>
           </div>
           <div style={outsideIntroItemStyle}>
-            <span style={outsideIntroItemTitleStyle}>РОЛИ</span>
-            <span>Персонал клуба управляет музыкой, входом и порядком.</span>
+            <span style={outsideIntroItemTitleStyle}>{appText(language, 'РОЛИ', 'ROLES')}</span>
+            <span>{appText(language, 'Персонал клуба управляет музыкой, входом и порядком.', 'Club staff controls music, entry, and order.')}</span>
           </div>
         </div>
         <button type="button" style={outsideIntroButtonStyle} onClick={onDone}>
-          ПОНЯТНО
+          {appText(language, 'ПОНЯТНО', 'GOT IT')}
         </button>
       </div>
     </>
@@ -1713,23 +1733,24 @@ function OutsideIntroModal({ onDone }: { onDone: () => void }) {
 }
 
 function OutsideHintsOverlay({ onDone }: { onDone: () => void }) {
+  const { language } = useAppLanguage()
   return (
     <>
       <div style={outsideHintDimStyle} />
       <div style={{ ...outsideHintCalloutStyle, left: 84, bottom: 'calc(env(safe-area-inset-bottom, 0px) + 252px)' }}>
         <span style={outsideHintArrowStyle}>↙</span>
-        <span>ГОЛОС</span>
+        <span>{appText(language, 'ГОЛОС', 'VOICE')}</span>
       </div>
       <div style={{ ...outsideHintCalloutStyle, right: 52, top: 'calc(env(safe-area-inset-top, 0px) + 95px)', textAlign: 'right' }}>
         <span>MUSIC</span>
         <span style={outsideHintArrowStyle}>↗</span>
       </div>
       <div style={{ ...outsideHintCalloutStyle, right: 56, top: 'calc(env(safe-area-inset-top, 0px) + 198px)', textAlign: 'right' }}>
-        <span>ГРОМКОСТЬ</span>
+        <span>{appText(language, 'ГРОМКОСТЬ', 'VOLUME')}</span>
         <span style={outsideHintArrowStyle}>→</span>
       </div>
       <div style={{ ...outsideHintCalloutStyle, right: 136, bottom: 'calc(env(safe-area-inset-bottom, 0px) + 98px)', textAlign: 'right' }}>
-        <span>ОЧЕРЕДЬ / ОБРАЗ</span>
+        <span>{appText(language, 'ОЧЕРЕДЬ / ОБРАЗ', 'QUEUE / OUTFIT')}</span>
         <span style={outsideHintArrowStyle}>↘</span>
       </div>
       <button type="button" style={outsideHintOkStyle} onClick={onDone}>
@@ -1841,11 +1862,11 @@ const outsideIntroButtonStyle: CSSProperties = {
 }
 
 const OUTSIDE_FACE_REASONS = [
-  { code: 'vibe_check', label: 'Вайб-чек' },
-  { code: 'dress_code', label: 'Дресс-код' },
-  { code: 'overcrowded', label: 'Переполнено' },
-  { code: 'behavior', label: 'Поведение' },
-  { code: 'closed_event', label: 'Закрыто' },
+  { code: 'vibe_check', ru: 'Вайб-чек', en: 'Vibe check' },
+  { code: 'dress_code', ru: 'Дресс-код', en: 'Dress code' },
+  { code: 'overcrowded', ru: 'Переполнено', en: 'Overcrowded' },
+  { code: 'behavior', ru: 'Поведение', en: 'Behavior' },
+  { code: 'closed_event', ru: 'Закрыто', en: 'Closed event' },
 ]
 
 function OutsideFaceControlPanel({
@@ -1856,6 +1877,7 @@ function OutsideFaceControlPanel({
   onApprove,
   onDeny,
   onClose,
+  language,
 }: {
   queue: QueueEntry[]
   selected: QueueEntry | null
@@ -1864,6 +1886,7 @@ function OutsideFaceControlPanel({
   onApprove: (entry: QueueEntry) => void
   onDeny: (entry: QueueEntry, reason: string) => void
   onClose: () => void
+  language: AppLanguage
 }) {
   return (
     <div style={outsideFacePanelStyle}>
@@ -1874,7 +1897,7 @@ function OutsideFaceControlPanel({
       <div style={outsideFaceBodyStyle}>
         <div style={outsideFaceQueueStyle}>
           <div style={outsideFaceColumnTitleStyle}>QUEUE / {queue.length}</div>
-          {queue.length === 0 && <div style={outsideFaceEmptyStyle}>пусто</div>}
+          {queue.length === 0 && <div style={outsideFaceEmptyStyle}>{appText(language, 'пусто', 'empty')}</div>}
           {queue.map((entry) => (
             <button
               key={entry.id}
@@ -1889,29 +1912,29 @@ function OutsideFaceControlPanel({
               <span style={{ ...outsideFaceAvatarDotStyle, background: entry.topColor }} />
               <span style={{ minWidth: 0 }}>
                 <span style={outsideFaceQueueNameStyle}>{entry.displayName}</span>
-                <span style={outsideFaceQueuePosStyle}>#{entry.pos} в очереди</span>
+                <span style={outsideFaceQueuePosStyle}>#{entry.pos} {appText(language, 'в очереди', 'in queue')}</span>
               </span>
             </button>
           ))}
         </div>
         <div style={outsideFaceDecisionStyle}>
           {!selected ? (
-            <div style={outsideFaceEmptyStyle}>выбери игрока</div>
+            <div style={outsideFaceEmptyStyle}>{appText(language, 'выбери игрока', 'select a player')}</div>
           ) : (
             <>
               <div style={{ color: '#e8e8f0', fontSize: 14, marginBottom: 4 }}>{selected.displayName}</div>
-              <div style={{ color: '#5b6474', fontSize: 11, marginBottom: 12 }}>#{selected.pos} в очереди</div>
+              <div style={{ color: '#5b6474', fontSize: 11, marginBottom: 12 }}>#{selected.pos} {appText(language, 'в очереди', 'in queue')}</div>
               <div style={{ display: 'grid', placeItems: 'center', marginBottom: 12 }}>
                 <AvatarMini entry={selected} />
               </div>
               <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-                <button type="button" onClick={() => onApprove(selected)} style={outsideFaceApproveStyle}>ВПУСТИТЬ</button>
-                <button type="button" onClick={() => onDeny(selected, 'vibe_check')} style={outsideFaceDenyStyle}>ОТКАЗАТЬ</button>
+                <button type="button" onClick={() => onApprove(selected)} style={outsideFaceApproveStyle}>{appText(language, 'ВПУСТИТЬ', 'ADMIT')}</button>
+                <button type="button" onClick={() => onDeny(selected, 'vibe_check')} style={outsideFaceDenyStyle}>{appText(language, 'ОТКАЗАТЬ', 'DENY')}</button>
               </div>
               <div style={outsideFaceReasonsStyle}>
                 {OUTSIDE_FACE_REASONS.map((reason) => (
                   <button key={reason.code} type="button" onClick={() => onDeny(selected, reason.code)} style={outsideFaceReasonButtonStyle}>
-                    {reason.label}
+                    {appText(language, reason.ru, reason.en)}
                   </button>
                 ))}
               </div>
@@ -1920,7 +1943,7 @@ function OutsideFaceControlPanel({
         </div>
         <div style={outsideFaceLogStyle}>
           <div style={outsideFaceColumnTitleStyle}>LOG</div>
-          {log.length === 0 && <div style={outsideFaceEmptyStyle}>нет действий</div>}
+          {log.length === 0 && <div style={outsideFaceEmptyStyle}>{appText(language, 'нет действий', 'no actions')}</div>}
           {log.map((entry, index) => (
             <div key={`${entry}-${index}`} style={outsideFaceLogEntryStyle}>{entry}</div>
           ))}
@@ -2400,6 +2423,7 @@ function OutfitModal({
   onClose: () => void
   onDone: (until: number) => void
 }) {
+  const { language } = useAppLanguage()
   const [step,   setStep]   = useState<ModalStep>('intro')
   const [photos, setPhotos] = useState<OutfitPhotos>({ fullbody: null, face: null })
   const [generated, setGenerated] = useState<AvatarConfig | null>(null)
@@ -2713,27 +2737,27 @@ function OutfitModal({
   return (
     <div style={overlay}>
       <button onClick={close} style={{position:'absolute',top:16,right:16,background:'transparent',border:'1px solid #333',borderRadius:4,color:'#888',fontFamily:'monospace',fontSize:12,padding:'6px 14px',cursor:'pointer'}}>
-        ЗАКРЫТЬ
+        {appText(language, 'ЗАКРЫТЬ', 'CLOSE')}
       </button>
 
       {step==='intro' && <>
-        <div style={{fontSize:11,color:'#e040fb',letterSpacing:3,marginBottom:8}}>СМЕНА ОБРАЗА</div>
-        <div style={{fontSize:20,fontWeight:700,marginBottom:12}}>Новый аватар</div>
+        <div style={{fontSize:11,color:'#e040fb',letterSpacing:3,marginBottom:8}}>{appText(language, 'СМЕНА ОБРАЗА', 'OUTFIT CHANGE')}</div>
+        <div style={{fontSize:20,fontWeight:700,marginBottom:12}}>{appText(language, 'Новый аватар', 'New avatar')}</div>
         <div style={{fontSize:13,color:'#888',textAlign:'center',lineHeight:1.7,maxWidth:330}}>
-          Нужен один кадр в полный рост. Система подготовит фото, соберёт 3D-модель и заменит персонажа в outside.
+          {appText(language, 'Нужен один кадр в полный рост. Система подготовит фото, соберёт 3D-модель и заменит персонажа в outside.', 'You need one full-body shot. The system will prepare the photo, build a 3D model, and replace your outside character.')}
           <br/><br/>
-          <span style={{fontSize:11,color:'#555'}}>После сохранения смена снова закроется на 10 минут</span>
+          <span style={{fontSize:11,color:'#555'}}>{appText(language, 'После сохранения смена снова закроется на 10 минут', 'After saving, changing will be locked again for 10 minutes')}</span>
         </div>
         <button style={btnStyle} onClick={()=>{setStep('fullbody');startCamera('environment')}}>
-          НАЧАТЬ
+          {appText(language, 'НАЧАТЬ', 'START')}
         </button>
       </>}
 
       {step==='fullbody' && <>
-        <div style={{fontSize:11,color:'#e040fb',letterSpacing:3,marginBottom:8}}>ШАГ 1 из 1</div>
-        <div style={{fontSize:20,fontWeight:700,marginBottom:8}}>Полный рост</div>
+        <div style={{fontSize:11,color:'#e040fb',letterSpacing:3,marginBottom:8}}>{appText(language, 'ШАГ 1 из 1', 'STEP 1 OF 1')}</div>
+        <div style={{fontSize:20,fontWeight:700,marginBottom:8}}>{appText(language, 'Полный рост', 'Full body')}</div>
         <div style={{fontSize:13,color:'#888',textAlign:'center',lineHeight:1.6,maxWidth:330}}>
-          Встань прямо: лицо, руки и обувь должны попасть в кадр.
+          {appText(language, 'Встань прямо: лицо, руки и обувь должны попасть в кадр.', 'Stand straight: face, hands, and shoes should be in frame.')}
         </div>
         {error && <div style={{color:'#ff4444',fontSize:13,marginTop:8,textAlign:'center'}}>{error}</div>}
         <div style={{width:'100%',maxWidth:400,position:'relative',marginTop:16}}>
@@ -2741,40 +2765,40 @@ function OutfitModal({
             <video ref={videoRef} playsInline muted autoPlay style={{width:'100%',maxWidth:400,borderRadius:8,border:'1px solid #2a2a3a',display:'block',background:'#111'}}/>
           ) : (
             <div style={{width:'100%',maxWidth:400,minHeight:240,borderRadius:8,border:'1px solid #2a2a3a',background:'rgba(13,13,26,0.82)',display:'flex',alignItems:'center',justifyContent:'center',padding:24,textAlign:'center',fontSize:12,lineHeight:1.7,color:'#888'}}>
-              Сделай фото в полный рост или выбери готовое из галереи.
+              {appText(language, 'Сделай фото в полный рост или выбери готовое из галереи.', 'Take a full-body photo or choose one from your gallery.')}
             </div>
           )}
           {isDetecting && (
             <div style={{position:'absolute',inset:0,display:'flex',alignItems:'center',justifyContent:'center',borderRadius:8,background:'rgba(13,13,26,0.68)',color:'#e8e8f0',fontSize:13,fontWeight:700,letterSpacing:2}}>
-              ОПРЕДЕЛЯЕМ...
+              {appText(language, 'ОПРЕДЕЛЯЕМ...', 'DETECTING...')}
             </div>
           )}
         </div>
         <canvas ref={canvasRef} style={{display:'none'}}/>
         {cameraMode==='live' ? (
           <>
-            <button style={btnStyle} onClick={handleCapture} disabled={isDetecting}>{isDetecting ? 'ОБРАБОТКА' : 'СНЯТЬ'}</button>
+            <button style={btnStyle} onClick={handleCapture} disabled={isDetecting}>{isDetecting ? appText(language, 'ОБРАБОТКА', 'PROCESSING') : appText(language, 'СНЯТЬ', 'CAPTURE')}</button>
             <button style={ghostStyle} onClick={handleSwitchCamera} disabled={isDetecting}>
-              {cameraFacing === 'environment' ? 'ФРОНТАЛЬНАЯ КАМЕРА' : 'ЗАДНЯЯ КАМЕРА'}
+              {cameraFacing === 'environment' ? appText(language, 'ФРОНТАЛЬНАЯ КАМЕРА', 'FRONT CAMERA') : appText(language, 'ЗАДНЯЯ КАМЕРА', 'REAR CAMERA')}
             </button>
             <input ref={cameraInputRef} type="file" accept="image/*" capture={cameraFacing} style={{display:'none'}} onChange={handleFileInput}/>
           </>
         ) : (
           <label style={{...btnStyle,...pickerLabelStyle}}>
-            <span>СНЯТЬ</span>
+            <span>{appText(language, 'СНЯТЬ', 'CAPTURE')}</span>
             <input type="file" accept="image/*" capture={cameraFacing} style={pickerInputStyle} onChange={handleFileInput}/>
           </label>
         )}
         <input ref={fileInputRef} type="file" accept="image/*" style={{display:'none'}} onChange={handleFileInput}/>
-        <button style={ghostStyle} onClick={() => fileInputRef.current?.click()} disabled={isDetecting}>ЗАГРУЗИТЬ ИЗ ГАЛЕРЕИ</button>
-        <button style={{...ghostStyle,marginTop:4}} onClick={resetFlow}>НАЗАД</button>
+        <button style={ghostStyle} onClick={() => fileInputRef.current?.click()} disabled={isDetecting}>{appText(language, 'ЗАГРУЗИТЬ ИЗ ГАЛЕРЕИ', 'UPLOAD FROM GALLERY')}</button>
+        <button style={{...ghostStyle,marginTop:4}} onClick={resetFlow}>{appText(language, 'НАЗАД', 'BACK')}</button>
       </>}
 
       {step==='review' && <>
         <div style={{fontSize:11,color:'#e040fb',letterSpacing:3,marginBottom:8}}>DOOR//CLUB</div>
-        <div style={{fontSize:20,fontWeight:700,marginBottom:12}}>Проверь фото</div>
+        <div style={{fontSize:20,fontWeight:700,marginBottom:12}}>{appText(language, 'Проверь фото', 'Check the photo')}</div>
         <OutfitPhotoReview
-          label="ПОЛНЫЙ РОСТ"
+          label={appText(language, 'ПОЛНЫЙ РОСТ', 'FULL BODY')}
           src={photos.fullbody}
           onRetake={() => {
             setGenerated(null)
@@ -2783,23 +2807,23 @@ function OutfitModal({
           }}
         />
         {error && <div style={{color:'#ff4444',fontSize:13,marginTop:8,textAlign:'center',maxWidth:360}}>{error}</div>}
-        <button style={btnStyle} onClick={handleGenerate}>СОЗДАТЬ 3D АВАТАР</button>
-        <button style={ghostStyle} onClick={resetFlow}>ПЕРЕСНЯТЬ</button>
+        <button style={btnStyle} onClick={handleGenerate}>{appText(language, 'СОЗДАТЬ 3D АВАТАР', 'CREATE 3D AVATAR')}</button>
+        <button style={ghostStyle} onClick={resetFlow}>{appText(language, 'ПЕРЕСНЯТЬ', 'RETAKE')}</button>
       </>}
 
       {(step==='generating'||step==='saving') && <>
-        <div style={{fontSize:11,color:'#e040fb',letterSpacing:3,marginBottom:8}}>СМЕНА ОБРАЗА</div>
-        <div style={{fontSize:20,fontWeight:700}}>{step==='saving' ? 'Сохраняем...' : 'Собираем персонажа...'}</div>
+        <div style={{fontSize:11,color:'#e040fb',letterSpacing:3,marginBottom:8}}>{appText(language, 'СМЕНА ОБРАЗА', 'OUTFIT CHANGE')}</div>
+        <div style={{fontSize:20,fontWeight:700}}>{step==='saving' ? appText(language, 'Сохраняем...', 'Saving...') : appText(language, 'Собираем персонажа...', 'Building character...')}</div>
         <div style={{fontSize:13,color:'#888',marginTop:12,textAlign:'center',lineHeight:1.6,maxWidth:380}}>
-          {step==='saving' ? 'Секунду' : notice?.message ?? 'Собираем 3D-модель'}
+          {step==='saving' ? appText(language, 'Секунду', 'One second') : translateOutfitMessage(notice?.message ?? 'Собираем 3D-модель', language)}
         </div>
-        {step==='generating' && <OutfitGenerationProcessView process={generationProcess} />}
+        {step==='generating' && <OutfitGenerationProcessView process={generationProcess} language={language} />}
         {error && <div style={{color:'#ff4444',fontSize:13,marginTop:12,textAlign:'center',maxWidth:360}}>{error}</div>}
       </>}
 
       {step==='preview' && generated && <>
         <div style={{fontSize:11,color:'#e040fb',letterSpacing:3,marginBottom:8}}>DOOR//CLUB</div>
-        <div style={{fontSize:20,fontWeight:700,marginBottom:10}}>Новый персонаж</div>
+        <div style={{fontSize:20,fontWeight:700,marginBottom:10}}>{appText(language, 'Новый персонаж', 'New character')}</div>
         <AvatarPreview3D config={generated} width={260} height={350} />
         <div style={{display:'flex',gap:8,marginTop:12}}>
           <span style={{...outfitModalStyles.swatch,background:generated.skinTone}} />
@@ -2808,11 +2832,11 @@ function OutfitModal({
           <span style={{...outfitModalStyles.swatch,background:generated.bottomColor}} />
           <span style={{...outfitModalStyles.swatch,background:generated.shoesColor}} />
         </div>
-        {notice && <div style={{...outfitModalStyles.notice,...outfitNoticeToneStyle(notice.tone)}}>{notice.message}</div>}
+        {notice && <div style={{...outfitModalStyles.notice,...outfitNoticeToneStyle(notice.tone)}}>{translateOutfitMessage(notice.message, language)}</div>}
         {error && <div style={{color:'#ff4444',fontSize:13,marginTop:8,textAlign:'center',maxWidth:360}}>{error}</div>}
         <div style={{display:'flex',gap:10,justifyContent:'center',flexWrap:'wrap'}}>
-          <button style={btnStyle} onClick={handleConfirm}>СОХРАНИТЬ ОБРАЗ</button>
-          <button style={{...ghostStyle,marginTop:16}} onClick={resetFlow}>ПЕРЕСНЯТЬ</button>
+          <button style={btnStyle} onClick={handleConfirm}>{appText(language, 'СОХРАНИТЬ ОБРАЗ', 'SAVE OUTFIT')}</button>
+          <button style={{...ghostStyle,marginTop:16}} onClick={resetFlow}>{appText(language, 'ПЕРЕСНЯТЬ', 'RETAKE')}</button>
         </div>
       </>}
     </div>
@@ -2872,23 +2896,23 @@ function processOutfitPipelineEvent(
   }
 }
 
-function OutfitGenerationProcessView({ process }: { process: OutfitGenerationProcess }) {
-  const stages: Array<{ key: OutfitPipelineStage; label: string }> = [
-    { key: 'source', label: 'Исходное фото' },
-    { key: 'fallback', label: 'Быстрый аватар' },
-    { key: 'kie_upload', label: 'Загрузка фото' },
-    { key: 'kie_create', label: 'Подготовка' },
-    { key: 'kie_wait', label: 'Обработка фото' },
-    { key: 'kie_download', label: 'Получение фото' },
-    { key: 'kie_done', label: 'Фото готово' },
-    { key: 'trellis_connect', label: '3D подключение' },
-    { key: 'trellis_session', label: 'Очередь сборки' },
-    { key: 'trellis_preprocess', label: 'Нормализация' },
-    { key: 'trellis_generate', label: '3D сборка' },
-    { key: 'trellis_upload', label: 'Сохранение модели' },
-    { key: 'autorig', label: 'Движения' },
-    { key: 'save', label: 'Сохранение' },
-    { key: 'done', label: 'Готово' },
+function OutfitGenerationProcessView({ process, language }: { process: OutfitGenerationProcess; language: AppLanguage }) {
+  const stages: Array<{ key: OutfitPipelineStage; ru: string; en: string }> = [
+    { key: 'source', ru: 'Исходное фото', en: 'Source photo' },
+    { key: 'fallback', ru: 'Быстрый аватар', en: 'Quick avatar' },
+    { key: 'kie_upload', ru: 'Загрузка фото', en: 'Photo upload' },
+    { key: 'kie_create', ru: 'Подготовка', en: 'Preparation' },
+    { key: 'kie_wait', ru: 'Обработка фото', en: 'Photo processing' },
+    { key: 'kie_download', ru: 'Получение фото', en: 'Photo download' },
+    { key: 'kie_done', ru: 'Фото готово', en: 'Photo ready' },
+    { key: 'trellis_connect', ru: '3D подключение', en: '3D connection' },
+    { key: 'trellis_session', ru: 'Очередь сборки', en: 'Build queue' },
+    { key: 'trellis_preprocess', ru: 'Нормализация', en: 'Normalization' },
+    { key: 'trellis_generate', ru: '3D сборка', en: '3D build' },
+    { key: 'trellis_upload', ru: 'Сохранение модели', en: 'Model save' },
+    { key: 'autorig', ru: 'Движения', en: 'Motion' },
+    { key: 'save', ru: 'Сохранение', en: 'Saving' },
+    { key: 'done', ru: 'Готово', en: 'Done' },
   ]
   const activeIndex = Math.max(0, stages.findIndex((stage) => stage.key === process.stage))
   const showProgress = process.stage !== 'source'
@@ -2905,7 +2929,7 @@ function OutfitGenerationProcessView({ process }: { process: OutfitGenerationPro
               ...(index === activeIndex ? outfitModalStyles.pipelineStepActive : {}),
             }}
           >
-            {stage.label}
+            {appText(language, stage.ru, stage.en)}
           </div>
         ))}
       </div>
@@ -2920,12 +2944,12 @@ function OutfitGenerationProcessView({ process }: { process: OutfitGenerationPro
       )}
 
       <div style={outfitModalStyles.pipelineImages}>
-        {process.sourceImage && <OutfitPipelineImage label="исходное фото" src={process.sourceImage} />}
-        {process.kieImage && <OutfitPipelineImage label="подготовленное фото" src={process.kieImage} />}
+        {process.sourceImage && <OutfitPipelineImage label={appText(language, 'исходное фото', 'source photo')} src={process.sourceImage} />}
+        {process.kieImage && <OutfitPipelineImage label={appText(language, 'подготовленное фото', 'prepared photo')} src={process.kieImage} />}
       </div>
 
       <div style={outfitModalStyles.pipelinePlaceholder}>
-        {process.message || formatOutfitPipelineHint(process.stage)}
+        {translateOutfitMessage(process.message || formatOutfitPipelineHint(process.stage), language)}
       </div>
     </div>
   )
@@ -2951,16 +2975,36 @@ function formatOutfitPipelineHint(stage: OutfitPipelineStage): string {
   return 'Готовим фото'
 }
 
+function translateOutfitMessage(message: string, language: AppLanguage) {
+  if (language === 'ru') return message
+  return message
+    .replace('Готовим фото', 'Preparing photo')
+    .replace('Готовим исходное фото', 'Preparing source photo')
+    .replace('Собираем быстрый превью-аватар', 'Building quick preview avatar')
+    .replace('Быстрый аватар готов', 'Quick avatar is ready')
+    .replace('Подготавливаем фото', 'Preparing photo')
+    .replace('Аватар готов', 'Avatar is ready')
+    .replace('3D-модель готова', '3D model is ready')
+    .replace('3D-модель не получилась, оставили быстрый аватар', '3D model failed, keeping quick avatar')
+    .replace('3D-модель не успела собраться', '3D model did not finish in time')
+    .replace('Собираем 3D-модель', 'Building 3D model')
+    .replace('Подготавливаем модель для движения', 'Preparing model for motion')
+    .replace('Сохраняем аватар', 'Saving avatar')
+    .replace('3D-модель готова для персонажа', '3D model is ready for the character')
+    .replace('Генерация остановилась', 'Generation stopped')
+}
+
 function OutfitPhotoReview({ label, src, onRetake }: {
   label: string
   src: string | null
   onRetake: () => void
 }) {
+  const { language } = useAppLanguage()
   return (
     <div style={{ textAlign: 'center' }}>
       <div style={outfitModalStyles.photoLabel}>{label}</div>
       {src && <img src={src} style={outfitModalStyles.photo} alt={label} />}
-      <button style={{ ...outfitModalStyles.ghostButton, marginTop: 8 }} onClick={onRetake}>Переснять</button>
+      <button style={{ ...outfitModalStyles.ghostButton, marginTop: 8 }} onClick={onRetake}>{appText(language, 'Переснять', 'Retake')}</button>
     </div>
   )
 }
@@ -3095,9 +3139,17 @@ const outfitModalStyles: Record<string, CSSProperties> = {
   },
 }
 
-const REASON_LABELS: Record<string,string> = {
-  dress_code:'Не тот дресс-код', overcrowded:'Клуб переполнен',
-  behavior:'Поведение в очереди', closed_event:'Закрытое мероприятие', vibe_check:'Не прошёл вайб-чек',
+const REASON_LABELS: Record<string, { ru: string; en: string }> = {
+  dress_code: { ru: 'Не тот дресс-код', en: 'Wrong dress code' },
+  overcrowded: { ru: 'Клуб переполнен', en: 'Club is full' },
+  behavior: { ru: 'Поведение в очереди', en: 'Queue behavior' },
+  closed_event: { ru: 'Закрытое мероприятие', en: 'Closed event' },
+  vibe_check: { ru: 'Не прошёл вайб-чек', en: 'Failed vibe check' },
+}
+
+function reasonLabel(reason: string, language: AppLanguage) {
+  const label = REASON_LABELS[reason]
+  return label ? appText(language, label.ru, label.en) : reason
 }
 
 function fmtSecs(s: number) { return `${Math.floor(s/60)}:${(s%60).toString().padStart(2,'0')}` }

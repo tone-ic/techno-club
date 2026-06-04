@@ -11,6 +11,7 @@ import { useAudioStore } from '@/store/audioStore'
 import { usePlayerStore } from '@/store/playerStore'
 import { getLiveKitToken, LIVEKIT_DJ_ROOM } from '@/utils/livekit'
 import { claimCaptureAudioSession, preferCaptureAudioSession, preferPlaybackAudioSession } from '@/utils/audioSession'
+import { appText, useAppLanguage, type AppLanguage } from '@/components/AppSettings'
 
 type VoiceStatus = 'idle' | 'connecting' | 'ready' | 'talking' | 'error'
 type VoiceEnvironment = 'club' | 'outside'
@@ -240,10 +241,19 @@ function assertMicrophoneAvailable() {
   }
 }
 
-function voiceErrorMessage(error: any, fallback: string) {
+function voiceErrorMessage(error: any, fallback: string, language: AppLanguage) {
   const message = String(error?.message || error || fallback)
   if (message.includes('signal connection') || message.includes('Load failed') || message.includes('server was not reachable')) {
-    return 'LiveKit signal недоступен: нужен HTTPS/WSS или LAN LiveKit'
+    return appText(language, 'LiveKit signal недоступен: нужен HTTPS/WSS или LAN LiveKit', 'LiveKit signal is unavailable: HTTPS/WSS or LAN LiveKit is required')
+  }
+  if (message.includes('MIC нужен HTTPS')) {
+    return appText(language, message, 'MIC requires HTTPS: open through HTTPS/tunnel')
+  }
+  if (message.includes('Браузер не вернул аудиотрек')) {
+    return appText(language, message, 'The browser did not return a microphone audio track')
+  }
+  if (message.includes('Игрок еще подключается')) {
+    return appText(language, message, 'Player is still connecting to the club')
   }
   return message
 }
@@ -326,6 +336,7 @@ export default function VoiceChat({
   myPlayerId: string | null
   environment: VoiceEnvironment
 }) {
+  const { language } = useAppLanguage()
   const roomRef = useRef<Room | null>(null)
   const connectPromiseRef = useRef<Promise<Room> | null>(null)
   const localTrackRef = useRef<LocalAudioTrack | null>(null)
@@ -688,7 +699,7 @@ export default function VoiceChat({
       }
     } catch (e: any) {
       if (mountedRef.current) {
-        setError(voiceErrorMessage(e, 'Не удалось включить микрофон'))
+        setError(voiceErrorMessage(e, appText(language, 'Не удалось включить микрофон', 'Could not enable microphone'), language))
         setStatus('error')
       }
     }
@@ -737,7 +748,7 @@ export default function VoiceChat({
       }
     } catch (e: any) {
       if (mountedRef.current) {
-        setError(voiceErrorMessage(e, 'Не удалось включить микрофон'))
+        setError(voiceErrorMessage(e, appText(language, 'Не удалось включить микрофон', 'Could not enable microphone'), language))
         setStatus('error')
       }
       setOutgoingTalking(false)
@@ -822,7 +833,7 @@ export default function VoiceChat({
       setOutgoingTalking(false)
       await releaseLocalVoiceCapture()
       if (mountedRef.current) {
-        setError(voiceErrorMessage(e, 'Не удалось включить авто-микрофон'))
+        setError(voiceErrorMessage(e, appText(language, 'Не удалось включить авто-микрофон', 'Could not enable auto microphone'), language))
         setStatus('error')
       }
     }
@@ -970,7 +981,14 @@ export default function VoiceChat({
   const ready = status === 'ready' || status === 'talking'
   const autoActive = voiceMode === 'auto'
   const label = active ? 'ON' : busy ? '...' : 'MIC'
-  const subLabel = error ? 'MIC OFF' : active ? 'MIC LIVE' : autoActive ? 'AUTO LISTEN' : nearbyVoices > 0 ? `${nearbyVoices} РЯДОМ` : ready ? 'VOICE' : 'OFF'
+  const subLabel = error ? 'MIC OFF' : active ? 'MIC LIVE' : autoActive ? 'AUTO LISTEN' : nearbyVoices > 0 ? `${nearbyVoices} ${appText(language, 'РЯДОМ', 'NEARBY')}` : ready ? 'VOICE' : 'OFF'
+  const voiceLabel = appText(language, 'Голосовая связь', 'Voice chat')
+  const autoLabel = autoActive
+    ? appText(language, 'Выключить авто-микрофон', 'Turn off auto microphone')
+    : appText(language, 'Включить авто-микрофон', 'Turn on auto microphone')
+  const incomingLabel = incomingVoicesEnabled
+    ? appText(language, 'Выключить голоса игроков', 'Turn off player voices')
+    : appText(language, 'Включить голоса игроков', 'Turn on player voices')
 
   return (
     <div style={panelStyle}>
@@ -986,7 +1004,7 @@ export default function VoiceChat({
           }}
           onContextMenu={(event) => event.preventDefault()}
           style={voiceButtonStyle(active, busy, !myPlayerId || autoActive)}
-          aria-label="Голосовая связь"
+          aria-label={voiceLabel}
         >
           <span style={dotStyle(active, ready, Boolean(error))} />
           <span>{label}</span>
@@ -999,8 +1017,8 @@ export default function VoiceChat({
             toggleAutoVoice()
           }}
           style={autoButtonStyle(autoActive, active, busy, !myPlayerId)}
-          aria-label={autoActive ? 'Выключить авто-микрофон' : 'Включить авто-микрофон'}
-          title={autoActive ? 'Выключить авто-микрофон' : 'Включить авто-микрофон'}
+          aria-label={autoLabel}
+          title={autoLabel}
         >
           AUTO
         </button>
@@ -1011,8 +1029,8 @@ export default function VoiceChat({
             toggleIncomingPlayback()
           }}
           style={muteButtonStyle(incomingVoicesEnabled)}
-          aria-label={incomingVoicesEnabled ? 'Выключить голоса игроков' : 'Включить голоса игроков'}
-          title={incomingVoicesEnabled ? 'Выключить голоса игроков' : 'Включить голоса игроков'}
+          aria-label={incomingLabel}
+          title={incomingLabel}
         >
           {incomingVoicesEnabled ? 'IN' : 'OFF'}
         </button>
@@ -1024,22 +1042,26 @@ export default function VoiceChat({
       {pendingMicAction && (
         <div style={micNoticeBackdropStyle}>
           <div style={micNoticeStyle}>
-            <div style={micNoticeTitleStyle}>Перед первым микрофоном</div>
+            <div style={micNoticeTitleStyle}>{appText(language, 'Перед первым микрофоном', 'Before your first mic')}</div>
             <div style={micNoticeTextStyle}>
-              Настоятельно рекомендуем использовать наушники: так музыка не попадет обратно в микрофон, а голоса игроков будут чище.
+              {appText(
+                language,
+                'Настоятельно рекомендуем использовать наушники: так музыка не попадет обратно в микрофон, а голоса игроков будут чище.',
+                'Headphones are strongly recommended: music will not bleed back into your mic, and player voices will sound clearer.'
+              )}
             </div>
             <button type="button" style={micNoticePrimaryStyle} onClick={(event) => {
               event.stopPropagation()
               confirmMicNotice()
             }}>
-              Включить микрофон
+              {appText(language, 'Включить микрофон', 'Enable microphone')}
             </button>
             <button type="button" style={micNoticeGhostStyle} onClick={(event) => {
               event.stopPropagation()
               resetMovementInputForVoiceUi()
               setPendingMicAction(null)
             }}>
-              Не сейчас
+              {appText(language, 'Не сейчас', 'Not now')}
             </button>
           </div>
         </div>

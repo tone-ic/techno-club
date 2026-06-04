@@ -48,14 +48,20 @@ export function useAppLanguage() {
   return { language, toggleLanguage }
 }
 
+export function appText(language: AppLanguage, ru: string, en: string) {
+  return language === 'ru' ? ru : en
+}
+
 export function LanguageToggleButton({ compact = false }: { compact?: boolean }) {
   const { language, toggleLanguage } = useAppLanguage()
+  const label = appText(language, 'Сменить язык', 'Change language')
   return (
     <button
       type="button"
       onClick={toggleLanguage}
       style={compact ? compactLanguageButtonStyle : settingsActionButtonStyle}
-      aria-label="Сменить язык"
+      aria-label={label}
+      title={label}
     >
       {language === 'ru' ? 'RU' : 'EN'}
     </button>
@@ -63,6 +69,8 @@ export function LanguageToggleButton({ compact = false }: { compact?: boolean })
 }
 
 export function SettingsButton({ onClick, active = false }: { onClick: () => void; active?: boolean }) {
+  const { language } = useAppLanguage()
+  const label = appText(language, 'Настройки', 'Settings')
   return (
     <button
       type="button"
@@ -72,8 +80,8 @@ export function SettingsButton({ onClick, active = false }: { onClick: () => voi
         background: active ? '#d8b06f' : 'rgba(13,13,22,0.82)',
         color: active ? '#090807' : '#d8d0c2',
       }}
-      aria-label="Настройки"
-      title="Настройки"
+      aria-label={label}
+      title={label}
     >
       ⚙
     </button>
@@ -105,6 +113,21 @@ export default function AppSettings({
   const setVoiceVolume = useAudioStore((state) => state.setVoiceVolume)
   const { language, toggleLanguage } = useAppLanguage()
   const [busy, setBusy] = useState(false)
+  const text = {
+    title: appText(language, 'Настройки', 'Settings'),
+    model: appText(language, 'Модель', 'Model'),
+    noModel: appText(language, 'нет модели', 'no model'),
+    serverRole: appText(language, 'Серверная роль', 'Server role'),
+    controls: appText(language, 'Управление', 'Controls'),
+    language: appText(language, 'Язык', 'Language'),
+    russian: appText(language, 'Русский', 'Russian'),
+    english: 'English',
+    exitOutside: appText(language, 'Выйти наружу', 'Go outside'),
+    musicVolume: appText(language, 'Громкость музыки', 'Music volume'),
+    voiceVolume: appText(language, 'Громкость входящего голосового чата', 'Incoming voice chat volume'),
+    signingOut: appText(language, 'Выходим...', 'Signing out...'),
+    switchAccount: appText(language, 'Сменить аккаунт', 'Switch account'),
+  }
 
   if (!open) return null
 
@@ -125,14 +148,14 @@ export default function AppSettings({
         <div style={settingsHeaderStyle}>
           <div>
             <div style={settingsKickerStyle}>DOOR//CLUB</div>
-            <div style={settingsTitleStyle}>Настройки</div>
+            <div style={settingsTitleStyle}>{text.title}</div>
           </div>
           <button type="button" onClick={onClose} style={settingsCloseButtonStyle}>X</button>
         </div>
 
         <div style={settingsGridStyle}>
           <div style={settingsPreviewColumnStyle}>
-            <div style={settingsSectionTitleStyle}>Модель</div>
+            <div style={settingsSectionTitleStyle}>{text.model}</div>
             {avatarConfig ? (
               <AvatarPreview3D
                 config={avatarConfig}
@@ -141,19 +164,19 @@ export default function AppSettings({
                 style={settingsAvatarPreviewStyle}
               />
             ) : (
-              <div style={settingsEmptyPreviewStyle}>нет модели</div>
+              <div style={settingsEmptyPreviewStyle}>{text.noModel}</div>
             )}
             <div style={settingsRoleBoxStyle}>
-              <span>Серверная роль</span>
+              <span>{text.serverRole}</span>
               <strong>{roleLabel(role)}</strong>
             </div>
             {accountEmail && <div style={settingsEmailStyle}>{accountEmail}</div>}
           </div>
 
           <div style={settingsControlsColumnStyle}>
-            <div style={settingsSectionTitleStyle}>Управление</div>
+            <div style={settingsSectionTitleStyle}>{text.controls}</div>
             <button type="button" onClick={toggleLanguage} style={settingsActionButtonStyle}>
-              Язык: {language === 'ru' ? 'Русский' : 'English'}
+              {text.language}: {language === 'ru' ? text.russian : text.english}
             </button>
             <button
               type="button"
@@ -179,17 +202,17 @@ export default function AppSettings({
                 }}
                 style={settingsActionButtonStyle}
               >
-                Выйти наружу
+                {text.exitOutside}
               </button>
             )}
 
             <SettingsSlider
-              label="Громкость музыки"
+              label={text.musicVolume}
               value={musicVolume}
               onChange={setMusicVolume}
             />
             <SettingsSlider
-              label="Громкость входящего голосового чата"
+              label={text.voiceVolume}
               value={voiceVolume}
               onChange={setVoiceVolume}
             />
@@ -204,7 +227,7 @@ export default function AppSettings({
                 cursor: busy ? 'default' : 'pointer',
               }}
             >
-              {busy ? 'Выходим...' : 'Сменить аккаунт'}
+              {busy ? text.signingOut : text.switchAccount}
             </button>
           </div>
         </div>

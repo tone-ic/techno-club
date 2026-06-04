@@ -206,7 +206,7 @@ interface Callbacks {
   onQueueJoined?:   (pos: number) => void
   onQueueLeft?:     () => void
   onQueueDenied?:   (reason: string, cooldownUntil: number) => void
-  onAdmitted?:      () => void
+  onAdmitted?:      (role?: string) => void
   onDenied?:        (reason: string, cooldownUntil: number) => void
   onRoleChanged?:   (role: string) => void
   onStaffEntryAdmitted?: (role: string) => void
@@ -392,7 +392,7 @@ class GameClient {
           case 'queueJoined':    cb.onQueueJoined?.(msg.pos); break
           case 'queueLeft':      cb.onQueueLeft?.(); break
           case 'queueDenied':    cb.onQueueDenied?.(msg.reason, msg.cooldownUntil); break
-          case 'admitted':       cb.onAdmitted?.(); break
+          case 'admitted':       cb.onAdmitted?.(msg.role); break
           case 'denied':         cb.onDenied?.(msg.reason, msg.cooldownUntil); break
           case 'musicSync':
             dispatchServerStatus({

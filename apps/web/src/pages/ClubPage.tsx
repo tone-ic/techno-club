@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom'
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import AdminDebugOverlay from '@/components/AdminDebugOverlay'
-import AppSettings, { SettingsButton } from '@/components/AppSettings'
+import AppSettings, { SettingsButton, appText, useAppLanguage, type AppLanguage } from '@/components/AppSettings'
 import { MUSIC_BPM_EVENT, MUSIC_OUTPUT_EVENT } from '@/components/MusicPlayer'
 import VoiceChat, { MOVEMENT_INPUT_RESET_EVENT, PROXIMITY_VOICE_POSITIONS_EVENT, VOICE_LEVELS_EVENT, VOICE_TALKING_EVENT } from '@/components/VoiceChat'
 import { usePlayerStore } from '@/store/playerStore'
@@ -25,11 +25,11 @@ type ManagementTab = 'security' | 'owner' | 'admin'
 const CLUB_NAME = 'DOOR//CLUB'
 const CLUB_WALK_BOUNDS = { minX: -15.2, maxX: 15.2, minZ: -14.7, maxZ: 9.8 } as const
 const CLUB_CAMERA_BOUNDS = { minX: -14.85, maxX: 14.85, minZ: -14.35, maxZ: 9.45, minY: 0.55, maxY: 7.85 } as const
-const ZONE_LABELS: Record<ClubZone, string> = {
-  floor: 'ТАНЦПОЛ',
-  dj: 'DJ BOOTH',
-  bar: 'БАР',
-  vip: 'VIP',
+const ZONE_LABELS: Record<ClubZone, { ru: string; en: string }> = {
+  floor: { ru: 'ТАНЦПОЛ', en: 'DANCE FLOOR' },
+  dj: { ru: 'DJ BOOTH', en: 'DJ BOOTH' },
+  bar: { ru: 'БАР', en: 'BAR' },
+  vip: { ru: 'VIP', en: 'VIP' },
 }
 
 const DANCE_OPTIONS: Array<{ id: DanceId; label: string; shortLabel: string }> = [
@@ -48,11 +48,11 @@ const MANAGEMENT_PANEL_OPEN_KEY = 'doorclub-management-panel-open'
 const MANAGEMENT_PANEL_TAB_KEY = 'doorclub-management-panel-tab'
 const CLUB_POSITION_SESSION_KEY = 'doorclub-club-position'
 const FACE_CONTROL_REASONS = [
-  { code: 'vibe_check', label: 'Вайб-чек' },
-  { code: 'dress_code', label: 'Дресс-код' },
-  { code: 'overcrowded', label: 'Переполнено' },
-  { code: 'behavior', label: 'Поведение' },
-  { code: 'closed_event', label: 'Закрыто' },
+  { code: 'vibe_check', ru: 'Вайб-чек', en: 'Vibe check' },
+  { code: 'dress_code', ru: 'Дресс-код', en: 'Dress code' },
+  { code: 'overcrowded', ru: 'Переполнено', en: 'Overcrowded' },
+  { code: 'behavior', ru: 'Поведение', en: 'Behavior' },
+  { code: 'closed_event', ru: 'Закрыто', en: 'Closed event' },
 ]
 const DEFAULT_DRINK_MENU: DrinkMenuItem[] = [
   { id: 'smoke_spritz', name: 'Дымный спритц', price: 120, effect: 'spark' },
@@ -111,6 +111,7 @@ function writeStoredClubPosition(x: number, z: number, floorLevel: ClubFloorLeve
 
 export default function ClubPage() {
   const navigate = useNavigate()
+  const { language } = useAppLanguage()
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const displayName = usePlayerStore((s) => s.displayName)
   const role = usePlayerStore((s) => s.role)
@@ -164,6 +165,7 @@ export default function ClubPage() {
   const musicRhythmIntensityRef = useRef(0)
   const musicKickIntensityRef = useRef(0)
   const musicOnsetStrengthRef = useRef(0)
+  const languageRef = useRef(language)
   const danceModeRef = useRef(danceMode)
   const selectedDanceRef = useRef<DanceId>(selectedDance)
   const talkingRef = useRef(false)
@@ -265,6 +267,10 @@ export default function ClubPage() {
         if (data?.config_json) usePlayerStore.getState().setAvatarConfig(data.config_json as any)
       })
   }, [userId, avatarConfig?.faceTextureUrl])
+
+  useEffect(() => {
+    languageRef.current = language
+  }, [language])
 
   useEffect(() => {
     crowdEnergyRef.current = clubEnergy
@@ -2895,7 +2901,10 @@ export default function ClubPage() {
         sessionStorage.removeItem(CLUB_POSITION_SESSION_KEY)
         sessionStorage.setItem('doorclub-outside-returned-from-club', '1')
         usePlayerStore.getState().setStatus('outside')
-        setClubToast(reason === 'security' ? 'Security вывел тебя наружу' : 'Ты выведен наружу')
+        const currentLanguage = languageRef.current
+        setClubToast(reason === 'security'
+          ? appText(currentLanguage, 'Security вывел тебя наружу', 'Security moved you outside')
+          : appText(currentLanguage, 'Ты выведен наружу', 'You were moved outside'))
         navigate('/outside', { replace: true })
       },
     })
@@ -3008,7 +3017,7 @@ export default function ClubPage() {
 
   const orderDrink = (drink: DrinkMenuItem, tip: number) => {
     gameClient.gameplayAction('orderDrink', { drinkId: drink.id, tip })
-    setClubToast(`${drink.name}: заказ отправляется`)
+    setClubToast(appText(language, `${drink.name}: заказ отправляется`, `${drink.name}: order is being sent`))
   }
 
   const serveBarOrder = (order: BarOrder) => {
@@ -3021,7 +3030,7 @@ export default function ClubPage() {
 
   const sipDrink = (drink: PlayerDrink, amount: number) => {
     gameClient.gameplayAction('drinkSip', { drinkInstanceId: drink.id, amount })
-    setClubToast(`${drink.drinkName}: пьём ${Math.round(amount * 100)}%`)
+    setClubToast(appText(language, `${drink.drinkName}: пьём ${Math.round(amount * 100)}%`, `${drink.drinkName}: drinking ${Math.round(amount * 100)}%`))
   }
 
   const giftDrink = (drink: PlayerDrink, targetId: string) => {
@@ -3029,18 +3038,18 @@ export default function ClubPage() {
   }
 
   const addFaceLog = (message: string) => {
-    setFaceLog((current) => [`${new Date().toLocaleTimeString('ru')}  ${message}`, ...current].slice(0, 24))
+    setFaceLog((current) => [`${new Date().toLocaleTimeString(language)}  ${message}`, ...current].slice(0, 24))
   }
 
   const approveQueueEntry = (entry: QueueEntry) => {
     gameClient.approve(entry.id)
-    addFaceLog(`Впустил ${entry.displayName}`)
+    addFaceLog(appText(language, `Впустил ${entry.displayName}`, `Admitted ${entry.displayName}`))
     setSelectedQueueId(null)
   }
 
   const denyQueueEntry = (entry: QueueEntry, reason: string) => {
     gameClient.deny(entry.id, reason)
-    addFaceLog(`Отказал ${entry.displayName}: ${reason}`)
+    addFaceLog(appText(language, `Отказал ${entry.displayName}: ${reason}`, `Denied ${entry.displayName}: ${reason}`))
     setSelectedQueueId(null)
   }
 
@@ -3077,7 +3086,7 @@ export default function ClubPage() {
           overflow: 'hidden',
           textOverflow: 'ellipsis',
         }}>
-          {CLUB_NAME} / {ZONE_LABELS[zone]}{zone === 'dj' ? ` / ${currentBpm === null ? '...' : currentBpm.toFixed(1)} BPM` : ''} / {displayName || 'GUEST'} / {clublesBalance} КЛБ / {playerCount} online
+          {CLUB_NAME} / {appText(language, ZONE_LABELS[zone].ru, ZONE_LABELS[zone].en)}{zone === 'dj' ? ` / ${currentBpm === null ? '...' : currentBpm.toFixed(1)} BPM` : ''} / {displayName || 'GUEST'} / {clublesBalance} {appText(language, 'КЛБ', 'CLB')} / {playerCount} online
         </div>
         <SettingsButton active={settingsOpen} onClick={() => setSettingsOpen((open) => !open)} />
       </div>
@@ -3100,7 +3109,7 @@ export default function ClubPage() {
           </div>
         )}
         <button onClick={() => setDanceMenuOpen((open) => !open)} style={hudButton(danceMode ? '#9a551c' : '#2a2a3a', danceMode ? '#070704' : '#8f95aa')}>
-          {danceMode ? `ТАНЕЦ ${selectedDanceOption.shortLabel}` : 'ТАНЕЦ'}
+          {danceMode ? `${appText(language, 'ТАНЕЦ', 'DANCE')} ${selectedDanceOption.shortLabel}` : appText(language, 'ТАНЕЦ', 'DANCE')}
         </button>
         <button
           onClick={() => {
@@ -3109,7 +3118,7 @@ export default function ClubPage() {
           }}
           style={hudButton(zone === 'bar' || barCustomerOpen || (isBartender && bartenderPanelOpen) ? '#ffb347' : '#2a2a3a', zone === 'bar' || barCustomerOpen || (isBartender && bartenderPanelOpen) ? '#07070c' : '#8f95aa')}
         >
-          БАР
+          {appText(language, 'БАР', 'BAR')}
         </button>
         <button style={hudButton(zone === 'vip' ? '#426b43' : '#2a2a3a', zone === 'vip' ? '#070704' : '#8f95aa')}>VIP</button>
         {canUseManagementPanel && (
@@ -3124,6 +3133,7 @@ export default function ClubPage() {
 
       {canUseManagementPanel && managementPanelOpen && (
         <ManagementPanel
+          language={language}
           role={role}
           activeTab={managementTab}
           players={managementPlayers}
@@ -3141,6 +3151,7 @@ export default function ClubPage() {
 
       {barCustomerOpen && !isBartender && (
         <BarCustomerPanel
+          language={language}
           balance={clublesBalance}
           menu={drinkMenu}
           drinks={myDrinks}
@@ -3182,6 +3193,7 @@ export default function ClubPage() {
         <>
           {facePanelOpen && (
             <FaceControlPanel
+              language={language}
               queue={queue}
               selected={selectedQueueEntry}
               log={faceLog}
@@ -3208,6 +3220,7 @@ export default function ClubPage() {
         <>
           {bartenderPanelOpen && (
             <BartenderPanel
+              language={language}
               balance={clublesBalance}
               orders={barOrders}
               stats={bartenderStats}
@@ -3257,6 +3270,7 @@ function hudButton(background: string, color: string): CSSProperties {
 }
 
 function FaceControlPanel({
+  language,
   queue,
   selected,
   log,
@@ -3265,6 +3279,7 @@ function FaceControlPanel({
   onDeny,
   onClose,
 }: {
+  language: AppLanguage
   queue: QueueEntry[]
   selected: QueueEntry | null
   log: string[]
@@ -3283,7 +3298,7 @@ function FaceControlPanel({
       <div style={facePanelBodyStyle}>
         <div style={faceQueueListStyle}>
           <div style={faceColumnTitleStyle}>QUEUE / {queue.length}</div>
-          {queue.length === 0 && <div style={faceEmptyStyle}>пусто</div>}
+          {queue.length === 0 && <div style={faceEmptyStyle}>{appText(language, 'пусто', 'empty')}</div>}
           {queue.map((entry) => (
             <button
               key={entry.id}
@@ -3298,7 +3313,7 @@ function FaceControlPanel({
               <span style={{ ...faceAvatarDotStyle, background: entry.topColor }} />
               <span style={{ minWidth: 0 }}>
                 <span style={faceQueueNameStyle}>{entry.displayName}</span>
-                <span style={faceQueuePosStyle}>#{entry.pos}</span>
+                <span style={faceQueuePosStyle}>#{entry.pos} {appText(language, 'в очереди', 'in queue')}</span>
               </span>
             </button>
           ))}
@@ -3306,22 +3321,22 @@ function FaceControlPanel({
 
         <div style={faceDecisionStyle}>
           {!selected ? (
-            <div style={faceEmptyStyle}>выбери игрока</div>
+            <div style={faceEmptyStyle}>{appText(language, 'выбери игрока', 'select a player')}</div>
           ) : (
             <>
               <div style={{ color: '#e8e8f0', fontSize: 14, marginBottom: 4 }}>{selected.displayName}</div>
-              <div style={{ color: '#5b6474', fontSize: 11, marginBottom: 14 }}>#{selected.pos} в очереди</div>
+              <div style={{ color: '#5b6474', fontSize: 11, marginBottom: 14 }}>#{selected.pos} {appText(language, 'в очереди', 'in queue')}</div>
               <div style={faceAvatarPreviewStyle}>
                 <AvatarMini entry={selected} />
               </div>
               <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-                <button type="button" onClick={() => onApprove(selected)} style={faceApproveStyle}>ВПУСТИТЬ</button>
-                <button type="button" onClick={() => onDeny(selected, 'vibe_check')} style={faceDenyStyle}>ОТКАЗАТЬ</button>
+                <button type="button" onClick={() => onApprove(selected)} style={faceApproveStyle}>{appText(language, 'ВПУСТИТЬ', 'ADMIT')}</button>
+                <button type="button" onClick={() => onDeny(selected, 'vibe_check')} style={faceDenyStyle}>{appText(language, 'ОТКАЗАТЬ', 'DENY')}</button>
               </div>
               <div style={faceReasonsStyle}>
                 {FACE_CONTROL_REASONS.map((reason) => (
                   <button key={reason.code} type="button" onClick={() => onDeny(selected, reason.code)} style={faceReasonButtonStyle}>
-                    {reason.label}
+                    {appText(language, reason.ru, reason.en)}
                   </button>
                 ))}
               </div>
@@ -3331,7 +3346,7 @@ function FaceControlPanel({
 
         <div style={faceLogStyle}>
           <div style={faceColumnTitleStyle}>LOG</div>
-          {log.length === 0 && <div style={faceEmptyStyle}>нет действий</div>}
+          {log.length === 0 && <div style={faceEmptyStyle}>{appText(language, 'нет действий', 'no actions')}</div>}
           {log.map((entry, index) => (
             <div key={`${entry}-${index}`} style={faceLogEntryStyle}>{entry}</div>
           ))}
@@ -3345,6 +3360,7 @@ const OWNER_ROLE_OPTIONS = ['guest', 'bouncer', 'guard', 'dj', 'bartender', 'vip
 const ADMIN_ROLE_OPTIONS = ['guest', 'bouncer', 'guard', 'dj', 'bartender', 'vip', 'owner', 'admin']
 
 export function ManagementPanel({
+  language,
   role,
   activeTab,
   players,
@@ -3358,6 +3374,7 @@ export function ManagementPanel({
   onSetDrinkPrice,
   onClose,
 }: {
+  language: AppLanguage
   role: string
   activeTab: ManagementTab
   players: ManagementPlayer[]
@@ -3420,7 +3437,7 @@ export function ManagementPanel({
         <div style={managementBodyStyle}>
           <div style={managementColumnStyle}>
             <div style={faceColumnTitleStyle}>QUEUE / {queue.length}</div>
-            {queue.length === 0 && <div style={faceEmptyStyle}>пусто</div>}
+            {queue.length === 0 && <div style={faceEmptyStyle}>{appText(language, 'пусто', 'empty')}</div>}
             {queue.map((entry) => (
               <div key={entry.id} style={managementQueueItemStyle}>
                 <span style={{ ...faceAvatarDotStyle, background: entry.topColor }} />
@@ -3453,7 +3470,7 @@ export function ManagementPanel({
           </div>
 
           <div style={managementActionColumnStyle}>
-            <SelectedPlayerCard player={selectedPlayer} />
+            <SelectedPlayerCard player={selectedPlayer} language={language} />
             {selectedPlayer && (
               <>
                 <button type="button" onClick={() => onAction('warnPlayer', { targetId: selectedPlayer.id })} style={managementActionButtonStyle}>
@@ -3513,7 +3530,7 @@ export function ManagementPanel({
           </div>
 
           <div style={managementActionColumnStyle}>
-            <SelectedPlayerCard player={selectedPlayer} />
+            <SelectedPlayerCard player={selectedPlayer} language={language} />
             {selectedPlayer && (
               <>
                 <div style={managementButtonGridStyle}>
@@ -3555,7 +3572,7 @@ export function ManagementPanel({
                   <span style={{ ...faceAvatarDotStyle, width: 22, height: 22, background: player.topColor }} />
                   <span style={{ minWidth: 0 }}>
                     <span style={faceQueueNameStyle}>{player.displayName}</span>
-                    <span style={faceQueuePosStyle}>{roleLabel(player.role)} / {player.room} / {player.clublesBalance} КЛБ</span>
+                    <span style={faceQueuePosStyle}>{roleLabel(player.role)} / {player.room} / {player.clublesBalance} {appText(language, 'КЛБ', 'CLB')}</span>
                   </span>
                 </button>
               ))}
@@ -3563,7 +3580,7 @@ export function ManagementPanel({
           </div>
 
           <div style={managementActionColumnStyle}>
-            <SelectedPlayerCard player={selectedPlayer} />
+            <SelectedPlayerCard player={selectedPlayer} language={language} />
             {selectedPlayer && (
               <>
                 <div style={managementButtonGridStyle}>
@@ -3593,8 +3610,8 @@ export function ManagementPanel({
   )
 }
 
-function SelectedPlayerCard({ player }: { player: ManagementPlayer | null }) {
-  if (!player) return <div style={faceEmptyStyle}>нет игрока</div>
+function SelectedPlayerCard({ player, language }: { player: ManagementPlayer | null; language: AppLanguage }) {
+  if (!player) return <div style={faceEmptyStyle}>{appText(language, 'нет игрока', 'no player')}</div>
   return (
     <div style={managementSelectedCardStyle}>
       <div style={{ ...faceAvatarDotStyle, width: 34, height: 34, background: player.topColor }} />
@@ -3615,6 +3632,7 @@ function roleLabel(role: string) {
 }
 
 function BarCustomerPanel({
+  language,
   balance,
   menu,
   drinks,
@@ -3625,6 +3643,7 @@ function BarCustomerPanel({
   onGift,
   onClose,
 }: {
+  language: AppLanguage
   balance: number
   menu: DrinkMenuItem[]
   drinks: PlayerDrink[]
@@ -3643,15 +3662,15 @@ function BarCustomerPanel({
     <div style={barCustomerPanelStyle}>
       <div style={barPanelHeaderStyle}>
         <div>
-          <div style={{ color: '#ffb347', letterSpacing: 2, fontSize: 12 }}>BAR / КЛУБЛИ</div>
-          <div style={{ color: '#8f95aa', fontSize: 10, marginTop: 4 }}>{balance} КЛБ на счету</div>
+          <div style={{ color: '#ffb347', letterSpacing: 2, fontSize: 12 }}>BAR / {appText(language, 'КЛУБЛИ', 'CLUBLES')}</div>
+          <div style={{ color: '#8f95aa', fontSize: 10, marginTop: 4 }}>{balance} {appText(language, 'КЛБ на счету', 'CLB balance')}</div>
         </div>
         <button type="button" onClick={onClose} style={facePanelCloseStyle}>MIN</button>
       </div>
       <div style={{ padding: 12 }}>
-        {!nearBar && <div style={barWarningStyle}>Подойди к бару, чтобы сделать заказ</div>}
+        {!nearBar && <div style={barWarningStyle}>{appText(language, 'Подойди к бару, чтобы сделать заказ', 'Step up to the bar to order')}</div>}
         <label style={barTipLabelStyle}>
-          ЧАЕВЫЕ
+          {appText(language, 'ЧАЕВЫЕ', 'TIP')}
           <input
             type="number"
             min={0}
@@ -3680,16 +3699,16 @@ function BarCustomerPanel({
               >
                 <span style={barDrinkNameStyle}>{drink.name}</span>
                 <span style={barDrinkMetaStyle}>
-                  {drink.price} + {tip} КЛБ
+                  {drink.price} + {tip} {appText(language, 'КЛБ', 'CLB')}
                 </span>
-                <span style={barDrinkEffectStyle}>{drinkEffectLabel(drink.effect)}</span>
+                <span style={barDrinkEffectStyle}>{drinkEffectLabel(drink.effect, language)}</span>
               </button>
             )
           })}
         </div>
         <div style={barInventoryStyle}>
-          <div style={faceColumnTitleStyle}>МОИ НАПИТКИ / {drinks.length}</div>
-          {drinks.length === 0 && <div style={faceEmptyStyle}>бармен ещё ничего не налил</div>}
+          <div style={faceColumnTitleStyle}>{appText(language, 'МОИ НАПИТКИ', 'MY DRINKS')} / {drinks.length}</div>
+          {drinks.length === 0 && <div style={faceEmptyStyle}>{appText(language, 'бармен ещё ничего не налил', 'the bartender has not poured anything yet')}</div>}
           {drinks.map((drink) => {
             const maxPercent = Math.max(1, Math.round(drink.remaining * 100))
             const valuePercent = Math.min(maxPercent, Math.max(1, Math.round((sipAmounts[drink.id] ?? Math.min(0.35, drink.remaining)) * 100)))
@@ -3714,7 +3733,7 @@ function BarCustomerPanel({
                 />
                 <div style={barDrinkInventoryActionsStyle}>
                   <button type="button" onClick={() => onSip(drink, valuePercent / 100)} style={barServeButtonStyle}>
-                    ПИТЬ {valuePercent}%
+                    {appText(language, 'ПИТЬ', 'DRINK')} {valuePercent}%
                   </button>
                   <select
                     value={targetId}
@@ -3723,7 +3742,7 @@ function BarCustomerPanel({
                     style={barGiftSelectStyle}
                   >
                     {nearbyPlayers.length === 0 ? (
-                      <option value="">рядом никого</option>
+                      <option value="">{appText(language, 'рядом никого', 'nobody nearby')}</option>
                     ) : nearbyPlayers.map((player) => (
                       <option key={player.id} value={player.id}>{player.displayName}</option>
                     ))}
@@ -3734,7 +3753,7 @@ function BarCustomerPanel({
                     onClick={() => targetId && onGift(drink, targetId)}
                     style={{ ...barGiftButtonStyle, opacity: targetId ? 1 : 0.45, cursor: targetId ? 'pointer' : 'not-allowed' }}
                   >
-                    УГОСТИТЬ
+                    {appText(language, 'УГОСТИТЬ', 'GIFT')}
                   </button>
                 </div>
               </div>
@@ -3747,6 +3766,7 @@ function BarCustomerPanel({
 }
 
 function BartenderPanel({
+  language,
   balance,
   orders,
   stats,
@@ -3754,6 +3774,7 @@ function BartenderPanel({
   onCancel,
   onClose,
 }: {
+  language: AppLanguage
   balance: number
   orders: BarOrder[]
   stats: { sales: number; tips: number }
@@ -3767,25 +3788,25 @@ function BartenderPanel({
         <div>
           <div style={{ color: '#ffb347', letterSpacing: 2, fontSize: 12 }}>BARTENDER SHIFT</div>
           <div style={{ color: '#8f95aa', fontSize: 10, marginTop: 4 }}>
-            касса {stats.sales} / чаевые {stats.tips} / баланс {balance} КЛБ
+            {appText(language, 'касса', 'sales')} {stats.sales} / {appText(language, 'чаевые', 'tips')} {stats.tips} / {appText(language, 'баланс', 'balance')} {balance} {appText(language, 'КЛБ', 'CLB')}
           </div>
         </div>
         <button type="button" onClick={onClose} style={facePanelCloseStyle}>MIN</button>
       </div>
 
       <div style={bartenderBodyStyle}>
-        <div style={faceColumnTitleStyle}>ЗАКАЗЫ / {orders.length}</div>
-        {orders.length === 0 && <div style={faceEmptyStyle}>ожидаем гостей у бара</div>}
+        <div style={faceColumnTitleStyle}>{appText(language, 'ЗАКАЗЫ', 'ORDERS')} / {orders.length}</div>
+        {orders.length === 0 && <div style={faceEmptyStyle}>{appText(language, 'ожидаем гостей у бара', 'waiting for guests at the bar')}</div>}
         {orders.map((order) => (
             <div key={order.id} style={barOrderItemStyle}>
               <div style={{ minWidth: 0 }}>
                 <div style={barOrderTitleStyle}>{order.drinkName}</div>
                 <div style={barOrderMetaStyle}>
-                  {order.customerName} / {order.price} КЛБ / tip {order.tip}
+                  {order.customerName} / {order.price} {appText(language, 'КЛБ', 'CLB')} / tip {order.tip}
                 </div>
               </div>
               <div style={barOrderActionsStyle}>
-                <button type="button" onClick={() => onServe(order)} style={barServeButtonStyle}>НАЛИТЬ</button>
+                <button type="button" onClick={() => onServe(order)} style={barServeButtonStyle}>{appText(language, 'НАЛИТЬ', 'SERVE')}</button>
                 <button type="button" onClick={() => onCancel(order)} style={barCancelButtonStyle}>X</button>
               </div>
             </div>
@@ -3799,12 +3820,12 @@ function isLockscreenMusicService(item: DrinkMenuItem) {
   return item.kind === 'service'
 }
 
-function drinkEffectLabel(effect: DrinkMenuItem['effect']) {
-  if (effect === 'service') return 'услуга / 8 часов'
-  if (effect === 'bass') return 'бас усиливается'
-  if (effect === 'focus') return 'резкий фокус'
-  if (effect === 'chill') return 'холодный шлейф'
-  return 'неоновая вспышка'
+function drinkEffectLabel(effect: DrinkMenuItem['effect'], language: AppLanguage) {
+  if (effect === 'service') return appText(language, 'услуга / 8 часов', 'service / 8 hours')
+  if (effect === 'bass') return appText(language, 'бас усиливается', 'bass boost')
+  if (effect === 'focus') return appText(language, 'резкий фокус', 'sharp focus')
+  if (effect === 'chill') return appText(language, 'холодный шлейф', 'cool trail')
+  return appText(language, 'неоновая вспышка', 'neon flash')
 }
 
 function drinkEffectTone(effect: DrinkMenuItem['effect']): CSSProperties {

@@ -2909,13 +2909,11 @@ export default function MusicPlayer() {
 
   if (!audioRoute) return null
 
-  const needsResumeButton = resumeRequired || (!started && !djLive)
-  const playerLabel = needsResumeButton
-    ? 'ВКЛ'
-    : djLive
-    ? djBlocked ? 'ЗВУК' : 'DJ'
-    : started ? 'MUSIC' : 'ЗВУК'
-  const playerColor = needsResumeButton
+  const needsAudioAttention = resumeRequired || (!started && !djLive) || djBlocked
+  const playerLabel = djLive
+    ? djBlocked ? 'DJ OFF' : 'DJ'
+    : started ? 'MUSIC' : 'MUSIC OFF'
+  const playerColor = needsAudioAttention
     ? '#ffb84d'
     : djLive
     ? djBlocked ? '#ffb84d' : '#00e676'
@@ -2923,8 +2921,7 @@ export default function MusicPlayer() {
   const playerTop = 'calc(env(safe-area-inset-top, 0px) + 72px)'
   return (
     <>
-      <button
-        type="button"
+      <div
         style={{
           position: 'fixed',
           top: playerTop,
@@ -2935,19 +2932,8 @@ export default function MusicPlayer() {
           display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
           background: 'rgba(13,13,26,0.7)', border: '1px solid #1a1a2e',
           borderRadius: 8, padding: '5px 9px',
-          fontFamily: 'monospace', zIndex: 260, pointerEvents: 'auto',
-          cursor: needsResumeButton || djBlocked || !started ? 'pointer' : 'default',
-        }}
-        onPointerDown={(event) => event.stopPropagation()}
-        onClick={(event) => {
-          event.stopPropagation()
-          if (!needsResumeButton && !djBlocked && started && _audio && !_audio.paused) {
-            syncTimelineFromAuthoritativeTrackState(true)
-            alignMusicToTimeline(true)
-            applyOutputState()
-            return
-          }
-          void enableAudio()
+          fontFamily: 'monospace', zIndex: 260, pointerEvents: 'none',
+          cursor: 'default',
         }}
         aria-label={playerLabel}
       >
@@ -2968,7 +2954,7 @@ export default function MusicPlayer() {
         }}>
           {playerLabel}
         </span>
-      </button>
+      </div>
     </>
   )
 }

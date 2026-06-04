@@ -1723,7 +1723,7 @@ wss.on('connection', (ws) => {
         actorPlayerKey: bouncer.economyKey,
         actorUserId: bouncer.userId,
       })
-      sendTo(msg.targetId, { type:'admitted' })
+      sendTo(msg.targetId, { type:'admitted', role: target.role })
       broadcast({ type:'playerLeft', id:msg.targetId }, msg.targetId, 'outside')
       broadcast({ type:'queueUpdate', queue:queueSnapshot() })
 
