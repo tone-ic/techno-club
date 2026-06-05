@@ -495,6 +495,7 @@ let _lockscreenSource: 'track' | 'dj' | null = null
 let _lockscreenSwitching = false
 let _mainAudioRestoring = false
 let _mainTrackRoutePromise: Promise<boolean> | null = null
+let _pendingTimelinePlayPromise: Promise<void> | null = null
 let _lastOutsideRouteEnsureAt = 0
 let _mainSpeakerConnected = false
 let _djSpeakerConnected = false
@@ -1153,6 +1154,17 @@ function playTimelineAudio(alignAfterStart = false) {
     return
   }
   if (!_audio) return
+  if (alignAfterStart && _audio.readyState < 1) {
+    if (!_pendingTimelinePlayPromise) {
+      const audio = _audio
+      _pendingTimelinePlayPromise = waitForCanPlay(audio).then(() => {
+        _pendingTimelinePlayPromise = null
+        if (_audio !== audio || audio.readyState < 1) return
+        playTimelineAudio(true)
+      })
+    }
+    return
+  }
   if (!_audio.paused) {
     void resumeAudioContext(_ctx)
     if (alignAfterStart) alignMusicToTimelineAfterResume()
@@ -2469,6 +2481,7 @@ function shutdownMusicAudioSingleton() {
   _djActive = false
   _djPlaybackReady = false
   _djPlaybackBlocked = false
+  _pendingTimelinePlayPromise = null
 
   stopMusicOutputOwnerHeartbeat()
   releaseMusicOutputOwnership()
@@ -2565,7 +2578,7 @@ export function applyMusicState(
     } else {
       audio.addEventListener('canplay', doSync, { once: true })
       if (serverTrackPaused) pauseTrackPlaybackForServerState()
-      else playTimelineAudio()
+      else playTimelineAudio(true)
     }
   }
 }
