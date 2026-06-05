@@ -351,6 +351,14 @@ export function DJBoothPanel({ embedded = false, onMinimize }: DJBoothPanelProps
     ? (musicState.djName || 'DJ LIVE')
     : (musicTracks[currentTrackIdx]?.name || musicState?.trackName || 'NO TRACK')
   const trackControlsDisabled = musicTracks.length === 0
+  const currentTrackPositionMs = (() => {
+    if (!musicState || musicState.source !== 'track') return undefined
+    if (typeof musicState.positionMs === 'number' && Number.isFinite(musicState.positionMs)) {
+      if (musicState.playing === false) return musicState.positionMs
+      return musicState.positionMs + Math.max(0, Date.now() - musicState.serverNow)
+    }
+    return Math.max(0, Date.now() - musicState.startedAt)
+  })()
 
   return (
     <div style={embedded ? embeddedRootStyle : pageRootStyle}>
@@ -416,7 +424,11 @@ export function DJBoothPanel({ embedded = false, onMinimize }: DJBoothPanelProps
               <button
                 type="button"
                 disabled={trackControlsDisabled}
-                onClick={() => gameClient.djMusicControl(trackPlaybackActive ? 'pause' : 'play')}
+                onClick={() => gameClient.djMusicControl(
+                  trackPlaybackActive ? 'pause' : 'play',
+                  undefined,
+                  currentTrackPositionMs,
+                )}
                 style={deckPrimaryButtonStyle(trackControlsDisabled)}
               >
                 {trackPlaybackActive ? 'PAUSE' : 'PLAY'}

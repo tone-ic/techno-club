@@ -537,8 +537,8 @@ class GameClient {
   setDjName(djName: string)               { this._send({ type: 'setDjName', djName }) }
   claimDjScheduleSlot()                   { this._send({ type: 'djScheduleClaim' }) }
   setDjStreamLive(active: boolean)         { this._send({ type: 'djStreamState', active }) }
-  djMusicControl(action: DjMusicControlAction, trackIdx?: number) {
-    this._send({ type: 'djMusicControl', action, trackIdx })
+  djMusicControl(action: DjMusicControlAction, trackIdx?: number, positionMs?: number) {
+    this._send({ type: 'djMusicControl', action, trackIdx, positionMs })
   }
   staffEntry(inviteRole: string, password: string) {
     this._send({ type: 'staffEntry', inviteRole, password })

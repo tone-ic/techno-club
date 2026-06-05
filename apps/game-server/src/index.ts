@@ -1264,6 +1264,15 @@ function trackElapsedMs(now = Date.now()) {
   return Math.max(0, now - musicStartedAt)
 }
 
+function normalizedTrackPositionMs(positionMs?: number) {
+  if (!Number.isFinite(positionMs)) return null
+  const durationSec = musicDurationsSec.get(normalizedMusicTrackIdx())
+  const maxPositionMs = durationSec && durationSec > 0
+    ? Math.max(0, durationSec * 1000 - 20)
+    : 24 * 60 * 60 * 1000
+  return clamp(Math.floor(positionMs), 0, maxPositionMs)
+}
+
 function selectMusicTrack(trackIdx: number, now = Date.now()) {
   musicTrackIdx = normalizedMusicTrackIdx(trackIdx)
   musicSource = 'track'
@@ -1272,24 +1281,28 @@ function selectMusicTrack(trackIdx: number, now = Date.now()) {
   musicTrackPlaying = true
 }
 
-function pauseMusicTrack(now = Date.now()) {
+function pauseMusicTrack(now = Date.now(), positionMs?: number) {
   musicSource = 'track'
-  if (musicTrackPlaying) musicPausedAtMs = trackElapsedMs(now)
+  const syncedPositionMs = normalizedTrackPositionMs(positionMs)
+  if (syncedPositionMs !== null) musicPausedAtMs = syncedPositionMs
+  else if (musicTrackPlaying) musicPausedAtMs = trackElapsedMs(now)
   musicTrackPlaying = false
 }
 
-function playMusicTrack(now = Date.now()) {
+function playMusicTrack(now = Date.now(), positionMs?: number) {
   musicSource = 'track'
+  const syncedPositionMs = normalizedTrackPositionMs(positionMs)
+  if (syncedPositionMs !== null) musicPausedAtMs = syncedPositionMs
   musicStartedAt = now - musicPausedAtMs
   musicTrackPlaying = true
 }
 
-function applyDjMusicControl(action: string, trackIdx?: number) {
+function applyDjMusicControl(action: string, trackIdx?: number, positionMs?: number) {
   const now = Date.now()
   if (action === 'pause') {
-    pauseMusicTrack(now)
+    pauseMusicTrack(now, positionMs)
   } else if (action === 'play') {
-    playMusicTrack(now)
+    playMusicTrack(now, positionMs)
   } else if (action === 'next') {
     selectMusicTrack(musicTrackIdx + 1, now)
   } else if (action === 'previous') {
@@ -2353,7 +2366,12 @@ wss.on('connection', (ws) => {
       const actor = players.get(playerId)
       if (!actor || !canControlDjMusic(actor)) return
       const trackIdx = Number(msg.trackIdx)
-      applyDjMusicControl(String(msg.action || ''), Number.isInteger(trackIdx) ? trackIdx : undefined)
+      const positionMs = Number(msg.positionMs)
+      applyDjMusicControl(
+        String(msg.action || ''),
+        Number.isInteger(trackIdx) ? trackIdx : undefined,
+        Number.isFinite(positionMs) ? positionMs : undefined,
+      )
     } else if (msg.type === 'musicTrackDuration') {
       const trackIdx = Number(msg.trackIdx)
       const duration = Number(msg.duration)
