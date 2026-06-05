@@ -287,6 +287,7 @@ function dispatchMusicSync(trackIdx: number, startedAt: number, serverNow?: numb
     return
   }
 
+  if (syncedState) dispatchMusicServerState(syncedState, serverNow, clientReceivedAt)
   window.dispatchEvent(new CustomEvent('music-sync', {
     detail: {
       trackIdx: syncedState?.trackIdx ?? trackIdx,
@@ -296,7 +297,6 @@ function dispatchMusicSync(trackIdx: number, startedAt: number, serverNow?: numb
       musicState,
     }
   }))
-  if (syncedState) dispatchMusicServerState(syncedState, serverNow, clientReceivedAt)
 }
 
 function dispatchDjSchedule(schedule: DjScheduleItem[], serverNow = Date.now()) {

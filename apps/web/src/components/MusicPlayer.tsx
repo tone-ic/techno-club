@@ -879,6 +879,7 @@ function applyServerMusicState(value: unknown, syncServerNow?: number, syncClien
   const bpm = clamp(value.bpm, BPM_MIN, BPM_MAX)
   if (!Number.isFinite(bpm) || value.beatIntervalMs <= 0) return
   const wasServerDjSource = shouldUseServerDjSource()
+  const wasServerTrackPaused = isServerTrackPlaybackPaused()
 
   rememberBroadcastServerTime(
     typeof syncServerNow === 'number' && Number.isFinite(syncServerNow) ? syncServerNow : value.serverNow,
@@ -902,6 +903,8 @@ function applyServerMusicState(value: unknown, syncServerNow?: number, syncClien
     syncTimelineFromAuthoritativeTrackState()
     if (_serverMusicState.playing === false) {
       pauseTrackPlaybackForServerState()
+    } else if (wasServerTrackPaused) {
+      playTimelineAudio(true)
     } else if (wasServerDjSource) {
       void resumeLocalTrackAfterDj()
     }
