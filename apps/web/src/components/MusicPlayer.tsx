@@ -582,6 +582,7 @@ let _hiddenSuspendedWithoutLockscreenAccess = false
 let _forceTimelineSeekAfterHiddenSuspend = false
 let _forceTimelineSeekAfterOutputHandoff = false
 let _forceTimelineSeekAfterVisibilityRestore = false
+let _forceTimelineSeekAfterServerResume = false
 let _lastKnownBpm: number | null = null
 let _screenWakeLock: { release: () => Promise<void>; addEventListener?: (type: string, listener: () => void) => void } | null = null
 let _screenWakeLockWanted = false
@@ -879,7 +880,7 @@ function applyServerMusicState(value: unknown, syncServerNow?: number, syncClien
   const bpm = clamp(value.bpm, BPM_MIN, BPM_MAX)
   if (!Number.isFinite(bpm) || value.beatIntervalMs <= 0) return
   const wasServerDjSource = shouldUseServerDjSource()
-  const wasServerTrackPaused = isServerTrackPlaybackPaused()
+  const wasServerTrackPaused = Boolean(_serverMusicState?.source === 'track' && _serverMusicState.playing === false)
 
   rememberBroadcastServerTime(
     typeof syncServerNow === 'number' && Number.isFinite(syncServerNow) ? syncServerNow : value.serverNow,
@@ -900,6 +901,9 @@ function applyServerMusicState(value: unknown, syncServerNow?: number, syncClien
     suspendLocalTrackForDj()
     void startDjAudioElement()
   } else {
+    if (_serverMusicState.playing !== false && wasServerTrackPaused) {
+      _forceTimelineSeekAfterServerResume = true
+    }
     syncTimelineFromAuthoritativeTrackState()
     if (_serverMusicState.playing === false) {
       pauseTrackPlaybackForServerState()
@@ -961,6 +965,23 @@ function getTrackPosition(startedAt: number, duration: number) {
   return elapsed % duration
 }
 
+function getElapsedTrackPosition(elapsedMs: number, duration: number) {
+  const elapsed = Math.max(0, elapsedMs / 1000)
+  if (!Number.isFinite(duration) || duration <= 0) return elapsed
+  return elapsed % duration
+}
+
+function getCurrentTrackPosition(startedAt: number, duration: number) {
+  const state = currentServerMusicState()
+  if (state && typeof state.positionMs === 'number' && Number.isFinite(state.positionMs)) {
+    const liveElapsedMs = state.playing === false
+      ? state.positionMs
+      : state.positionMs + Math.max(0, serverNow() - state.serverNow)
+    return getElapsedTrackPosition(liveElapsedMs, duration)
+  }
+  return getTrackPosition(startedAt, duration)
+}
+
 function signedTrackDriftSec(audioTime: number, targetTime: number, duration: number) {
   let drift = audioTime - targetTime
   if (Number.isFinite(duration) && duration > 0) {
@@ -992,7 +1013,7 @@ function alignMusicToTimeline(forceSeek = false) {
   if (!_musicTimeline || !_audio || _currentTrackIdx !== _musicTimeline.trackIdx) return false
   if (_audio.readyState < 1) return false
 
-  const targetTime = getTrackPosition(_musicTimeline.startedAt, _audio.duration)
+  const targetTime = getCurrentTrackPosition(_musicTimeline.startedAt, _audio.duration)
   if (!Number.isFinite(targetTime)) return false
   const drift = signedTrackDriftSec(_audio.currentTime, targetTime, _audio.duration)
   const absDrift = Math.abs(drift)
@@ -1016,7 +1037,7 @@ function alignMusicToTimelineAfterResume() {
   if (!_musicTimeline || !_audio || _currentTrackIdx !== _musicTimeline.trackIdx) return
   if (_audio.readyState < 1) return
 
-  const targetTime = getTrackPosition(_musicTimeline.startedAt, _audio.duration)
+  const targetTime = getCurrentTrackPosition(_musicTimeline.startedAt, _audio.duration)
   if (!Number.isFinite(targetTime)) return
   const drift = signedTrackDriftSec(_audio.currentTime, targetTime, _audio.duration)
   alignMusicToTimeline(Math.abs(drift) > MUSIC_START_SEEK_DRIFT_SEC)
@@ -1062,13 +1083,19 @@ function shouldWaitForFreshResumeMusicState() {
 }
 
 function hasPendingForcedTimelineSeek() {
-  return _forceTimelineSeekAfterHiddenSuspend || _forceTimelineSeekAfterOutputHandoff || _forceTimelineSeekAfterVisibilityRestore
+  return (
+    _forceTimelineSeekAfterHiddenSuspend ||
+    _forceTimelineSeekAfterOutputHandoff ||
+    _forceTimelineSeekAfterVisibilityRestore ||
+    _forceTimelineSeekAfterServerResume
+  )
 }
 
 function clearPendingForcedTimelineSeek() {
   _forceTimelineSeekAfterHiddenSuspend = false
   _forceTimelineSeekAfterOutputHandoff = false
   _forceTimelineSeekAfterVisibilityRestore = false
+  _forceTimelineSeekAfterServerResume = false
 }
 
 function alignMusicToTimelineForRouteRestore(wasPaused: boolean) {
@@ -1137,7 +1164,7 @@ function playTimelineAudio(alignAfterStart = false) {
   _audio.play()
     .then(() => {
       if (!alignAfterStart || !_audio || !_musicTimeline) return
-      const targetTime = getTrackPosition(_musicTimeline.startedAt, _audio.duration)
+      const targetTime = getCurrentTrackPosition(_musicTimeline.startedAt, _audio.duration)
       const drift = signedTrackDriftSec(_audio.currentTime, targetTime, _audio.duration)
       alignMusicToTimeline(Math.abs(drift) > MUSIC_START_SEEK_DRIFT_SEC)
     })

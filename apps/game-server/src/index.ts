@@ -716,6 +716,7 @@ function currentMusicState(now = Date.now()) {
     trackCount: musicTrackCount,
     trackName: musicTrackInfos[trackIdx]?.name ?? `Track ${trackIdx + 1}`,
     startedAt: timelineStartedAt,
+    positionMs: Math.max(0, now - timelineStartedAt),
     serverNow: now,
     bpm,
     bpmSource,

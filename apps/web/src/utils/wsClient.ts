@@ -41,6 +41,7 @@ export interface MusicServerState {
   djPlayerId?: string | null
   djName?: string
   startedAt: number
+  positionMs?: number
   serverNow: number
   bpm: number
   bpmSource?: 'audio' | 'pending' | 'fallback'
