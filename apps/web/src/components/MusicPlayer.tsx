@@ -887,6 +887,7 @@ function applyServerMusicState(value: unknown, syncServerNow?: number, syncClien
   _serverMusicState = {
     ...value,
     source: value.source === 'dj' ? 'dj' : 'track',
+    playing: value.playing !== false,
     bpm,
     intensity: clamp(value.intensity, 0, 1),
     rhythmIntensity: clamp(value.rhythmIntensity, 0, 1),
@@ -899,7 +900,11 @@ function applyServerMusicState(value: unknown, syncServerNow?: number, syncClien
     void startDjAudioElement()
   } else {
     syncTimelineFromAuthoritativeTrackState()
-    if (wasServerDjSource) void resumeLocalTrackAfterDj()
+    if (_serverMusicState.playing === false) {
+      pauseTrackPlaybackForServerState()
+    } else if (wasServerDjSource) {
+      void resumeLocalTrackAfterDj()
+    }
   }
   dispatchMusicBpm()
   dispatchMusicOutput()
@@ -913,6 +918,11 @@ function currentAuthoritativeMusicState() {
 
 function shouldUseServerDjSource() {
   return currentAuthoritativeMusicState()?.source === 'dj'
+}
+
+function isServerTrackPlaybackPaused() {
+  const state = currentAuthoritativeMusicState()
+  return Boolean(state && state.source === 'track' && state.playing === false)
 }
 
 function currentServerMusicState() {
@@ -1013,6 +1023,22 @@ function alignMusicToTimelineGently() {
   alignMusicToTimeline(false)
 }
 
+function pauseTrackPlaybackForServerState() {
+  if (_lockscreenSource === 'track') {
+    _lockscreenAudio?.pause()
+    if (_lockscreenAudio) _lockscreenAudio.volume = 0
+    _lockscreenActive = false
+    _lockscreenSource = null
+  }
+  if (_audio) {
+    if (_audio.readyState >= 1) alignMusicToTimeline(true)
+    _audio.playbackRate = 1
+    _audio.pause()
+  }
+  updateMediaSession('paused')
+  dispatchMusicOutput()
+}
+
 function markMusicTimelineInterrupted() {
   _forceTimelineSeekAfterVisibilityRestore = true
 }
@@ -1085,6 +1111,10 @@ function playTimelineAudio(alignAfterStart = false) {
     return
   }
   syncTimelineFromAuthoritativeTrackState()
+  if (isServerTrackPlaybackPaused()) {
+    pauseTrackPlaybackForServerState()
+    return
+  }
   if (shouldWaitForFreshResumeMusicState()) return
   if (_lockscreenActive) {
     if (_lockscreenSource === 'dj') void playLockscreenDjAudio()
@@ -1437,6 +1467,7 @@ async function primeLockscreenAudio() {
 
 async function primeTrackLockscreenAudio() {
   if (!_audio?.src) return
+  if (isServerTrackPlaybackPaused()) return
   const lockscreenAudio = syncLockscreenAudioFromMain()
   if (!lockscreenAudio) return
 
@@ -1490,6 +1521,10 @@ async function playLockscreenAudio(alignAfterStart = false) {
     return false
   }
   syncTimelineFromAuthoritativeTrackState()
+  if (isServerTrackPlaybackPaused()) {
+    pauseTrackPlaybackForServerState()
+    return false
+  }
   if (alignAfterStart) alignMusicToTimeline(true)
   if (_lockscreenActive && _lockscreenSource === 'track' && _lockscreenAudio && !_lockscreenAudio.paused) {
     if (!keepNativeRoute && !isDocumentHidden()) {
@@ -1686,6 +1721,10 @@ async function restoreTrackAudioFromLockscreen() {
     applyOutputState()
 
     syncTimelineFromAuthoritativeTrackState()
+    if (isServerTrackPlaybackPaused()) {
+      pauseTrackPlaybackForServerState()
+      return false
+    }
     await waitForCanPlay(_audio)
     if (hasPendingForcedTimelineSeek()) {
       if (!ensureTimelineAlignedBeforePlayback(true)) return false
@@ -1715,6 +1754,7 @@ async function restoreTrackAudioFromLockscreen() {
 
 function needsMainTrackAudioRouteRestore() {
   if (!_audioRouteActive || isDocumentHidden() || shouldUseServerDjSource()) return false
+  if (isServerTrackPlaybackPaused()) return false
   if (_hiddenSuspendedWithoutLockscreenAccess) return true
   if (!_audio?.src && _musicTimeline) return true
   if (!_audio?.src) return false
@@ -1750,6 +1790,10 @@ async function ensureMainTrackAudioRouteInner() {
     return shouldUseDjOutput()
   }
   syncTimelineFromAuthoritativeTrackState()
+  if (isServerTrackPlaybackPaused()) {
+    pauseTrackPlaybackForServerState()
+    return false
+  }
   if (!audio.src && _musicTimeline) {
     _currentTrackIdx = -1
     applyMusicState(_musicTimeline.trackIdx, _musicTimeline.startedAt)
@@ -2170,7 +2214,7 @@ function suspendLocalTrackForDj() {
 }
 
 async function resumeLocalTrackAfterDj() {
-  if (!_audioRouteActive || isDocumentHidden() || shouldUseServerDjSource()) return
+  if (!_audioRouteActive || isDocumentHidden() || shouldUseServerDjSource() || isServerTrackPlaybackPaused()) return
   if (!ensureMusicOutputOwnership()) {
     suspendLocalAudioForExternalOwner()
     return
@@ -2452,10 +2496,11 @@ export function applyMusicState(
     rememberBroadcastServerTime(syncServerNow, syncClientReceivedAt)
   }
   _musicTimeline = { trackIdx: nextTrackIdx, startedAt }
+  const serverTrackPaused = isServerTrackPlaybackPaused()
 
   const blockedByExternalOwner = hasActiveExternalMusicOutputOwner()
   if (blockedByExternalOwner) suspendLocalAudioForExternalOwner()
-  if (!blockedByExternalOwner && !shouldSuspendHiddenAudioWithoutAccess()) void resumeAudioContext(ctx)
+  if (!serverTrackPaused && !blockedByExternalOwner && !shouldSuspendHiddenAudioWithoutAccess()) void resumeAudioContext(ctx)
 
   if (_currentTrackIdx !== nextTrackIdx) {
     // Новый трек — загружаем и встаём на нужную позицию
@@ -2464,7 +2509,8 @@ export function applyMusicState(
     _lastKnownBpm = null
     const syncAtStart = () => {
       if (!ensureTimelineAlignedBeforePlayback(true)) return
-      void ensureMainTrackAudioRoute()
+      if (isServerTrackPlaybackPaused()) pauseTrackPlaybackForServerState()
+      else void ensureMainTrackAudioRoute()
     }
     audio.addEventListener('loadedmetadata', syncAtStart, { once: true })
     audio.addEventListener('canplay', syncAtStart, { once: true })
@@ -2481,13 +2527,15 @@ export function applyMusicState(
       } else {
         alignMusicToTimelineGently()
       }
-      void ensureMainTrackAudioRoute()
+      if (isServerTrackPlaybackPaused()) pauseTrackPlaybackForServerState()
+      else void ensureMainTrackAudioRoute()
     }
     if (audio.readyState >= 3) {
       doSync()
     } else {
       audio.addEventListener('canplay', doSync, { once: true })
-      playTimelineAudio()
+      if (serverTrackPaused) pauseTrackPlaybackForServerState()
+      else playTimelineAudio()
     }
   }
 }
@@ -2528,6 +2576,13 @@ export default function MusicPlayer() {
       return ready
     }
     if (!audio.src) return false
+    if (isServerTrackPlaybackPaused()) {
+      if (audio.readyState >= 1) alignMusicToTimeline(true)
+      pauseTrackPlaybackForServerState()
+      setStarted(true)
+      setResumeRequired(false)
+      return true
+    }
 
     try {
       await waitForCanPlay(audio)

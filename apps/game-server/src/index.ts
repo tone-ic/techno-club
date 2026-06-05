@@ -218,6 +218,8 @@ let musicTrackInfos = initialMusicTrackState.tracks
 let nextMusicScanAt = 0
 let musicTrackIdx = 0
 let musicStartedAt = Date.now()
+let musicTrackPlaying = true
+let musicPausedAtMs = 0
 let musicSource: MusicSource = 'track'
 let djStreamStartedAt = 0
 let djStreamPlayerId: string | null = null
@@ -461,6 +463,8 @@ function refreshMusicTrackState(force = false) {
   } else {
     musicTrackIdx = Math.min(musicTrackIdx, musicTrackCount - 1)
     musicStartedAt = now
+    musicPausedAtMs = 0
+    musicTrackPlaying = true
   }
   broadcastMusicSync()
 }
@@ -647,6 +651,7 @@ function currentMusicState(now = Date.now()) {
 
     return {
       source: 'dj',
+      playing: true,
       trackIdx,
       trackCount: musicTrackCount,
       trackName: djStreamName || 'DJ LIVE',
@@ -669,6 +674,7 @@ function currentMusicState(now = Date.now()) {
     }
   }
 
+  const timelineStartedAt = musicTrackPlaying ? musicStartedAt : now - musicPausedAtMs
   const { bpm, bpmConfidence, bpmSource } = musicBpmDetailsForTrack(trackIdx)
   const {
     beatIntervalMs,
@@ -678,7 +684,7 @@ function currentMusicState(now = Date.now()) {
     beatStartedAt,
     phraseBeat,
     measureBeat,
-  } = beatStateForTimeline(musicStartedAt, bpm, now)
+  } = beatStateForTimeline(timelineStartedAt, bpm, now)
   const phraseLift = smooth01(phraseBeat / 31)
   const fourBarLift = smooth01((((beatIndex % 16) + 16) % 16) / 15)
   const variation = 0.86 + seededNoise(trackIdx * 1009 + Math.floor(beatIndex / 4)) * 0.28
@@ -705,10 +711,11 @@ function currentMusicState(now = Date.now()) {
 
   return {
     source: 'track',
+    playing: musicTrackPlaying,
     trackIdx,
     trackCount: musicTrackCount,
     trackName: musicTrackInfos[trackIdx]?.name ?? `Track ${trackIdx + 1}`,
-    startedAt: musicStartedAt,
+    startedAt: timelineStartedAt,
     serverNow: now,
     bpm,
     bpmSource,
@@ -994,6 +1001,10 @@ function canUseDjBooth(player: Player) {
   return player.role === 'dj' || player.role === 'vip' || player.role === 'owner' || player.role === 'admin'
 }
 
+function canControlDjMusic(player: Player) {
+  return player.role === 'dj' || player.role === 'owner' || player.role === 'admin'
+}
+
 function canUseVipMezzanine(player: Player) {
   if (persistedVipAccess.get(player.economyKey) || vipGuests.has(player.id)) return true
   return (
@@ -1243,6 +1254,56 @@ function forcePlayerOutside(target: Player, reason: string) {
   broadcastDjSchedule()
 }
 
+function normalizedMusicTrackIdx(trackIdx = musicTrackIdx) {
+  return ((trackIdx % musicTrackCount) + musicTrackCount) % musicTrackCount
+}
+
+function trackElapsedMs(now = Date.now()) {
+  if (!musicTrackPlaying) return musicPausedAtMs
+  return Math.max(0, now - musicStartedAt)
+}
+
+function selectMusicTrack(trackIdx: number, now = Date.now()) {
+  musicTrackIdx = normalizedMusicTrackIdx(trackIdx)
+  musicSource = 'track'
+  musicStartedAt = now
+  musicPausedAtMs = 0
+  musicTrackPlaying = true
+}
+
+function pauseMusicTrack(now = Date.now()) {
+  musicSource = 'track'
+  if (musicTrackPlaying) musicPausedAtMs = trackElapsedMs(now)
+  musicTrackPlaying = false
+}
+
+function playMusicTrack(now = Date.now()) {
+  musicSource = 'track'
+  musicStartedAt = now - musicPausedAtMs
+  musicTrackPlaying = true
+}
+
+function applyDjMusicControl(action: string, trackIdx?: number) {
+  const now = Date.now()
+  if (action === 'pause') {
+    pauseMusicTrack(now)
+  } else if (action === 'play') {
+    playMusicTrack(now)
+  } else if (action === 'next') {
+    selectMusicTrack(musicTrackIdx + 1, now)
+  } else if (action === 'previous') {
+    selectMusicTrack(musicTrackIdx - 1, now)
+  } else if (action === 'select') {
+    if (!Number.isInteger(trackIdx)) return false
+    selectMusicTrack(trackIdx, now)
+  } else {
+    return false
+  }
+  broadcastMusicSync()
+  broadcastGameplayState()
+  return true
+}
+
 function sendGameplayState(player: Player) {
   setPlayerLockscreenMusic(player, lockscreenMusicUntilFor(player.economyKey))
   sendTo(player.id, {
@@ -1356,6 +1417,7 @@ function broadcastMusicState() {
 }
 
 function maybeAdvanceMusicTrack() {
+  if (!musicTrackPlaying) return
   for (let i = 0; i < musicTrackCount; i++) {
     const durationSec = musicDurationsSec.get(musicTrackIdx)
     if (!durationSec || durationSec < 5) return
@@ -2285,6 +2347,12 @@ wss.on('connection', (ws) => {
           text: `${drink.name}: ${drink.price} КЛБ`,
         })
       }
+    } else if (msg.type === 'djMusicControl') {
+      if (!playerId) return
+      const actor = players.get(playerId)
+      if (!actor || !canControlDjMusic(actor)) return
+      const trackIdx = Number(msg.trackIdx)
+      applyDjMusicControl(String(msg.action || ''), Number.isInteger(trackIdx) ? trackIdx : undefined)
     } else if (msg.type === 'musicTrackDuration') {
       const trackIdx = Number(msg.trackIdx)
       const duration = Number(msg.duration)

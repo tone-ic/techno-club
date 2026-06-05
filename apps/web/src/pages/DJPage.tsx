@@ -10,13 +10,20 @@ import {
 } from 'livekit-client'
 import { getLiveKitToken, LIVEKIT_DJ_ROOM } from '@/utils/livekit'
 import { usePlayerStore } from '@/store/playerStore'
-import { DJ_SCHEDULE_EVENT, gameClient, type DjScheduleItem } from '@/utils/wsClient'
+import { DJ_SCHEDULE_EVENT, MUSIC_SERVER_STATE_EVENT, gameClient, type DjScheduleItem, type MusicServerState } from '@/utils/wsClient'
 import { claimCaptureAudioSession, preferCaptureAudioSession } from '@/utils/audioSession'
 
 type DJBoothPanelProps = {
   embedded?: boolean
   onMinimize?: () => void
 }
+
+type DjMusicTrack = {
+  src: string
+  name: string
+}
+
+const MUSIC_MANIFEST_URL = '/music/manifest.json'
 
 const DJ_AUDIO_PRESET_DESKTOP = {
   ...AudioPresets.musicHighQualityStereo,
@@ -65,6 +72,8 @@ export function DJBoothPanel({ embedded = false, onMinimize }: DJBoothPanelProps
   const [error, setError] = useState('')
   const [schedule, setSchedule] = useState<DjScheduleItem[]>([])
   const [now, setNow] = useState(Date.now())
+  const [musicTracks, setMusicTracks] = useState<DjMusicTrack[]>([])
+  const [musicState, setMusicState] = useState<MusicServerState | null>(null)
   const [djName, setDjName] = useState(() => {
     const store = usePlayerStore.getState()
     return store.djName || store.displayName || 'DJ'
@@ -120,6 +129,45 @@ export function DJBoothPanel({ embedded = false, onMinimize }: DJBoothPanelProps
       window.clearInterval(timer)
       window.removeEventListener(DJ_SCHEDULE_EVENT, onSchedule)
     }
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    const loadTracks = async () => {
+      try {
+        const response = await fetch(`${MUSIC_MANIFEST_URL}?t=${Date.now()}`, { cache: 'no-store' })
+        if (!response.ok) return
+        const manifest = await response.json() as { tracks?: Array<{ src?: string; name?: string }> }
+        const tracks = (manifest.tracks ?? [])
+          .map((track) => {
+            const src = String(track.src || '')
+            if (!src) return null
+            return {
+              src,
+              name: String(track.name || trackNameFromSrc(src)),
+            }
+          })
+          .filter((track): track is DjMusicTrack => Boolean(track))
+        if (!cancelled) setMusicTracks(tracks)
+      } catch {
+        if (!cancelled) setMusicTracks([])
+      }
+    }
+    void loadTracks()
+    const timer = window.setInterval(loadTracks, 15_000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [])
+
+  useEffect(() => {
+    const onMusicState = (event: Event) => {
+      const detail = (event as CustomEvent<{ musicState?: MusicServerState }>).detail
+      if (detail?.musicState) setMusicState(detail.musicState)
+    }
+    window.addEventListener(MUSIC_SERVER_STATE_EVENT, onMusicState)
+    return () => window.removeEventListener(MUSIC_SERVER_STATE_EVENT, onMusicState)
   }, [])
 
   useEffect(() => {
@@ -296,6 +344,13 @@ export function DJBoothPanel({ embedded = false, onMinimize }: DJBoothPanelProps
   const live = status === 'live'
   const busy = status === 'connecting'
   const currentUserId = usePlayerStore.getState().userId
+  const trackPlaybackActive = musicState?.source === 'track' && musicState.playing !== false
+  const currentTrackIdx = musicState?.source === 'track' ? musicState.trackIdx : -1
+  const selectedTrackValue = currentTrackIdx >= 0 && currentTrackIdx < musicTracks.length ? String(currentTrackIdx) : ''
+  const currentTrackName = musicState?.source === 'dj'
+    ? (musicState.djName || 'DJ LIVE')
+    : (musicTracks[currentTrackIdx]?.name || musicState?.trackName || 'NO TRACK')
+  const trackControlsDisabled = musicTracks.length === 0
 
   return (
     <div style={embedded ? embeddedRootStyle : pageRootStyle}>
@@ -340,6 +395,56 @@ export function DJBoothPanel({ embedded = false, onMinimize }: DJBoothPanelProps
               gameClient.claimDjScheduleSlot()
             }}
           />
+
+          <section style={trackControlSectionStyle}>
+            <div style={trackControlHeaderStyle}>
+              <span>TRACK DECK</span>
+              <span style={{ color: trackPlaybackActive ? '#00e676' : '#d8b06f' }}>
+                {musicState?.source === 'dj' ? 'LIVE INPUT' : trackPlaybackActive ? 'PLAYING' : 'PAUSED'}
+              </span>
+            </div>
+            <div style={currentTrackStyle}>{currentTrackName}</div>
+            <div style={trackButtonRowStyle}>
+              <button
+                type="button"
+                disabled={trackControlsDisabled}
+                onClick={() => gameClient.djMusicControl('previous')}
+                style={deckButtonStyle(trackControlsDisabled)}
+              >
+                PREV
+              </button>
+              <button
+                type="button"
+                disabled={trackControlsDisabled}
+                onClick={() => gameClient.djMusicControl(trackPlaybackActive ? 'pause' : 'play')}
+                style={deckPrimaryButtonStyle(trackControlsDisabled)}
+              >
+                {trackPlaybackActive ? 'PAUSE' : 'PLAY'}
+              </button>
+              <button
+                type="button"
+                disabled={trackControlsDisabled}
+                onClick={() => gameClient.djMusicControl('next')}
+                style={deckButtonStyle(trackControlsDisabled)}
+              >
+                NEXT
+              </button>
+            </div>
+            <select
+              value={selectedTrackValue}
+              disabled={trackControlsDisabled}
+              onChange={(event) => gameClient.djMusicControl('select', Number(event.target.value))}
+              style={trackSelectStyle}
+            >
+              {musicTracks.length === 0 && <option value="">Нет загруженных треков</option>}
+              {musicTracks.length > 0 && selectedTrackValue === '' && <option value="">Выбрать трек</option>}
+              {musicTracks.map((track, idx) => (
+                <option key={`${track.src}-${idx}`} value={idx}>
+                  {idx + 1}. {track.name}
+                </option>
+              ))}
+            </select>
+          </section>
 
           <div style={{ fontSize: 11, color: '#666', letterSpacing: 2, marginBottom: 8 }}>AUDIO INPUT</div>
           <select
@@ -546,6 +651,14 @@ function formatDuration(ms: number) {
   return `${minutes}:${String(seconds).padStart(2, '0')}`
 }
 
+function trackNameFromSrc(src: string) {
+  const fileName = decodeURIComponent(src.split('/').pop() || src)
+    .replace(/\.[a-z0-9]+$/i, '')
+    .replace(/[_-]+/g, ' ')
+    .trim()
+  return fileName || 'Track'
+}
+
 const scheduleSectionStyle = {
   border: '1px solid #242016',
   borderRadius: 4,
@@ -632,6 +745,79 @@ const scheduleCountdownStyle = {
   fontSize: 10,
   whiteSpace: 'nowrap',
   textAlign: 'right',
+} as const
+
+const trackControlSectionStyle = {
+  border: '1px solid #1a2d29',
+  borderRadius: 4,
+  background: '#071111',
+  padding: 10,
+  margin: '0 0 14px',
+} as const
+
+const trackControlHeaderStyle = {
+  minHeight: 20,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 8,
+  color: '#19d7ff',
+  fontSize: 10,
+  letterSpacing: 1.6,
+} as const
+
+const currentTrackStyle = {
+  minHeight: 34,
+  display: 'flex',
+  alignItems: 'center',
+  color: '#f1eadf',
+  fontSize: 12,
+  lineHeight: 1.25,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+} as const
+
+const trackButtonRowStyle = {
+  display: 'grid',
+  gridTemplateColumns: '1fr 1.25fr 1fr',
+  gap: 8,
+  marginBottom: 8,
+} as const
+
+function deckButtonStyle(disabled: boolean) {
+  return {
+    minHeight: 36,
+    border: '1px solid #24413c',
+    borderRadius: 4,
+    background: disabled ? '#10151a' : '#0c2220',
+    color: disabled ? '#555' : '#a7f5e7',
+    fontFamily: 'monospace',
+    fontSize: 10,
+    fontWeight: 800,
+    cursor: disabled ? 'not-allowed' : 'pointer',
+  } as const
+}
+
+function deckPrimaryButtonStyle(disabled: boolean) {
+  return {
+    ...deckButtonStyle(disabled),
+    border: '1px solid rgba(0,230,118,0.52)',
+    background: disabled ? '#10151a' : 'rgba(0,230,118,0.14)',
+    color: disabled ? '#555' : '#d6ffe6',
+  } as const
+}
+
+const trackSelectStyle = {
+  width: '100%',
+  minHeight: 38,
+  background: '#10101f',
+  color: '#e8e8f0',
+  border: '1px solid #24413c',
+  borderRadius: 4,
+  fontFamily: 'monospace',
+  fontSize: 11,
+  padding: '0 10px',
 } as const
 
 const ghostButton = {

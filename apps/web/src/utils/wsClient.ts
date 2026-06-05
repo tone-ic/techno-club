@@ -4,6 +4,7 @@ import { resolveRuntimeUrl } from '@/utils/runtimeUrls'
 
 export const GAME_SERVER_STATUS_EVENT = 'game-server-status'
 export const DJ_SCHEDULE_EVENT = 'dj-schedule'
+export const MUSIC_SERVER_STATE_EVENT = 'music-server-state'
 const CLIENT_SESSION_STORAGE_KEY = 'doorclub-client-session-id'
 
 export interface DjScheduleItem {
@@ -33,6 +34,7 @@ export interface GameServerStatus {
 
 export interface MusicServerState {
   source: 'track' | 'dj'
+  playing: boolean
   trackIdx: number
   trackCount: number
   trackName?: string
@@ -197,6 +199,8 @@ export interface GameplayState {
   managementPlayers?: ManagementPlayer[]
 }
 
+export type DjMusicControlAction = 'play' | 'pause' | 'next' | 'previous' | 'select'
+
 interface Callbacks {
   onWelcome:        (myId: string, players: RemotePlayer[], myX?: number, myZ?: number, role?: string, queue?: QueueEntry[], cooldownUntil?: number, gameplay?: GameplayState, myFloorLevel?: RemotePlayer['floorLevel'], resumed?: boolean) => void
   onPlayerJoined:   (player: RemotePlayer) => void
@@ -251,13 +255,14 @@ function dispatchMusicServerState(value: unknown, serverNow?: number, clientRece
   const musicState: MusicServerState = {
     ...value,
     source: value.source === 'dj' ? 'dj' : 'track',
+    playing: value.playing !== false,
     serverNow: typeof value.serverNow === 'number' && Number.isFinite(value.serverNow)
       ? value.serverNow
       : typeof serverNow === 'number' && Number.isFinite(serverNow)
         ? serverNow
         : Date.now(),
   }
-  window.dispatchEvent(new CustomEvent('music-server-state', {
+  window.dispatchEvent(new CustomEvent(MUSIC_SERVER_STATE_EVENT, {
     detail: { musicState, serverNow: musicState.serverNow, clientReceivedAt }
   }))
   return musicState
@@ -268,6 +273,7 @@ function dispatchMusicSync(trackIdx: number, startedAt: number, serverNow?: numb
     ? {
         ...musicState,
         source: musicState.source === 'dj' ? 'dj' as const : 'track' as const,
+        playing: musicState.playing !== false,
         serverNow: typeof musicState.serverNow === 'number' && Number.isFinite(musicState.serverNow)
           ? musicState.serverNow
           : typeof serverNow === 'number' && Number.isFinite(serverNow)
@@ -452,6 +458,7 @@ class GameClient {
             clublesBalance: msg.clublesBalance,
             lockscreenMusicUntil: msg.lockscreenMusicUntil,
             activeEntitlements: msg.activeEntitlements,
+            musicSource: msg.musicState?.source ?? msg.musicSource,
             musicTrackIdx: msg.musicTrackIdx,
             musicTrackCount: msg.musicTrackCount,
             musicState: msg.musicState,
@@ -529,6 +536,9 @@ class GameClient {
   setDjName(djName: string)               { this._send({ type: 'setDjName', djName }) }
   claimDjScheduleSlot()                   { this._send({ type: 'djScheduleClaim' }) }
   setDjStreamLive(active: boolean)         { this._send({ type: 'djStreamState', active }) }
+  djMusicControl(action: DjMusicControlAction, trackIdx?: number) {
+    this._send({ type: 'djMusicControl', action, trackIdx })
+  }
   staffEntry(inviteRole: string, password: string) {
     this._send({ type: 'staffEntry', inviteRole, password })
   }
