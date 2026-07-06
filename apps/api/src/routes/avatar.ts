@@ -25,8 +25,8 @@ const TRELLIS_MAX_TEXTURE_SIZE = 2048
 const TRELLIS_MAX_TRIANGLES = 300000
 const TRELLIS_RANDOMIZE_SEED = true
 const MAX_TRELLIS_SEED = 2_147_483_647
-const PIXAL3D_TEXTURE_SIZE = numberFromEnv('PIXAL3D_TEXTURE_SIZE', 1024)
-const PIXAL3D_DECIMATION_TARGET = numberFromEnv('PIXAL3D_DECIMATION_TARGET', 300_000)
+const PIXAL3D_TEXTURE_SIZE = numberFromEnv('TRELLIS_TEXTURE_SIZE', numberFromEnv('PIXAL3D_TEXTURE_SIZE', 2048))
+const PIXAL3D_DECIMATION_TARGET = numberFromEnv('TRELLIS_DECIMATION_TARGET', numberFromEnv('PIXAL3D_DECIMATION_TARGET', 300_000))
 const PIXAL3D_RANDOMIZE_SEED = true
 const MAX_PIXAL3D_SEED = 2_147_483_647
 const MAX_IMAGE_DATA_URL_BYTES = 7_000_000
@@ -45,9 +45,10 @@ const KIE_CREATE_TIMEOUT_MS = Number(process.env.KIE_CREATE_TIMEOUT_MS || 45_000
 const KIE_POLL_TIMEOUT_MS = Number(process.env.KIE_POLL_TIMEOUT_MS || 900_000)
 const KIE_DOWNLOAD_TIMEOUT_MS = Number(process.env.KIE_DOWNLOAD_TIMEOUT_MS || 90_000)
 const AVATAR_MODELS_BUCKET = process.env.SUPABASE_AVATAR_MODELS_BUCKET || 'avatar-models'
+const TRELLIS_COMMUNITY_SPACE_ID = 'trellis-community/TRELLIS'
 const PIXAL3D_SERVER_SPACE_ID = 'TencentARC/Pixal3D-Server'
 const PIXAL3D_GRADIO_LIVE_HOST_SUFFIX = '.gradio.live'
-const HF_PIXAL3D_SPACE_ID = process.env.HF_PIXAL3D_SPACE_ID || PIXAL3D_SERVER_SPACE_ID
+const HF_PIXAL3D_SPACE_ID = process.env.HF_TRELLIS_SPACE_ID || process.env.HF_PIXAL3D_SPACE_ID || TRELLIS_COMMUNITY_SPACE_ID
 const HF_PIXAL3D_SPACE_URL = makeHuggingFaceSpaceUrl(HF_PIXAL3D_SPACE_ID)
 const HF_PIXAL3D_SERVER_DISCOVERY_URL = process.env.HF_PIXAL3D_SERVER_DISCOVERY_URL || HF_PIXAL3D_SPACE_URL
 const HF_PIXAL3D_CONFIGURED_INSTANCE_URLS = parsePixal3dInstanceUrls(
@@ -61,7 +62,6 @@ const BLENDER_AUTORIG_REPLACE_MODEL_URL = process.env.BLENDER_AUTORIG_REPLACE_MO
   && process.env.BLENDER_AUTORIG_REPLACE_MODEL_URL !== 'false'
 const PIXAL3D_HF_GENERATION_SETTINGS = {
   seed: 0,
-  resolution: 1024,
   decimationTarget: PIXAL3D_DECIMATION_TARGET,
   textureSize: PIXAL3D_TEXTURE_SIZE,
   ssGuidanceStrength: 10,
@@ -70,12 +70,14 @@ const PIXAL3D_HF_GENERATION_SETTINGS = {
   ssRescaleT: 5,
   shapeGuidance: 9,
   shapeRescale: 0.5,
-  shapeSamplingSteps: 12,
+  shapeSamplingSteps: 50,
   shapeRescaleT: 3,
-  texGuidance: 1,
+  texGuidance: 10,
   texRescale: 0,
-  texSamplingSteps: 12,
+  texSamplingSteps: 50,
   texRescaleT: 3,
+  meshSimplify: numberFromEnv('TRELLIS_MESH_SIMPLIFY', 0.9),
+  multiimageAlgo: 'stochastic',
   manualFov: -1,
   fovUnit: 'deg',
 } as const
@@ -1378,7 +1380,7 @@ function filterGradioEndpointArgs(
   }
 
   if (omitted.length) {
-    console.warn(`[Avatar Pixal3D] ${endpoint} does not accept ${omitted.join(', ')}; omitting.`)
+    console.warn(`[Avatar TRELLIS] ${endpoint} does not accept ${omitted.join(', ')}; omitting.`)
   }
 
   return filtered
@@ -1387,7 +1389,7 @@ function filterGradioEndpointArgs(
 async function discoverPixal3dInstanceUrls(): Promise<string[]> {
   if (HF_PIXAL3D_CONFIGURED_INSTANCE_URLS.length) return HF_PIXAL3D_CONFIGURED_INSTANCE_URLS
 
-  const directUrl = normalizePixal3dInstanceUrl(HF_PIXAL3D_SPACE_ID)
+  const directUrl = normalizePixal3dInstanceUrl(HF_PIXAL3D_SPACE_ID) || normalizePixal3dInstanceUrl(HF_PIXAL3D_SPACE_URL)
   if (directUrl && !directUrl.includes('pixal3d-server')) return [directUrl]
 
   if (cachedPixal3dInstanceUrls && cachedPixal3dInstanceUrls.expiresAt > Date.now()) {
@@ -1513,7 +1515,7 @@ async function connectHuggingFaceTrellisClient(): Promise<Pixal3dClientConnectio
   const gradio = await withTimeout(
     Client.connect(target.reference, token ? { token } : undefined),
     HF_CONNECT_TIMEOUT_MS,
-    `Hugging Face Pixal3D connect (${target.name})`,
+    `Hugging Face TRELLIS connect (${target.name})`,
   )
   return {
     gradio,
@@ -1635,22 +1637,15 @@ async function callHuggingFaceEndpoint(
 function makePixal3dGenerateArgs(image: unknown, sessionId: string): Record<string, unknown> {
   return {
     image,
+    multiimages: [],
     seed: getPixal3dSeed(),
-    resolution: PIXAL3D_HF_GENERATION_SETTINGS.resolution,
     ss_guidance_strength: PIXAL3D_HF_GENERATION_SETTINGS.ssGuidanceStrength,
-    ss_guidance_rescale: PIXAL3D_HF_GENERATION_SETTINGS.ssGuidanceRescale,
     ss_sampling_steps: PIXAL3D_HF_GENERATION_SETTINGS.ssSamplingSteps,
-    ss_rescale_t: PIXAL3D_HF_GENERATION_SETTINGS.ssRescaleT,
-    shape_slat_guidance_strength: PIXAL3D_HF_GENERATION_SETTINGS.shapeGuidance,
-    shape_slat_guidance_rescale: PIXAL3D_HF_GENERATION_SETTINGS.shapeRescale,
-    shape_slat_sampling_steps: PIXAL3D_HF_GENERATION_SETTINGS.shapeSamplingSteps,
-    shape_slat_rescale_t: PIXAL3D_HF_GENERATION_SETTINGS.shapeRescaleT,
-    tex_slat_guidance_strength: PIXAL3D_HF_GENERATION_SETTINGS.texGuidance,
-    tex_slat_guidance_rescale: PIXAL3D_HF_GENERATION_SETTINGS.texRescale,
-    tex_slat_sampling_steps: PIXAL3D_HF_GENERATION_SETTINGS.texSamplingSteps,
-    tex_slat_rescale_t: PIXAL3D_HF_GENERATION_SETTINGS.texRescaleT,
-    manual_fov: PIXAL3D_HF_GENERATION_SETTINGS.manualFov,
-    fov_unit: PIXAL3D_HF_GENERATION_SETTINGS.fovUnit,
+    slat_guidance_strength: PIXAL3D_HF_GENERATION_SETTINGS.shapeGuidance,
+    slat_sampling_steps: PIXAL3D_HF_GENERATION_SETTINGS.shapeSamplingSteps,
+    multiimage_algo: PIXAL3D_HF_GENERATION_SETTINGS.multiimageAlgo,
+    mesh_simplify: PIXAL3D_HF_GENERATION_SETTINGS.meshSimplify,
+    texture_size: PIXAL3D_HF_GENERATION_SETTINGS.textureSize,
     session_id: sessionId,
   }
 }
@@ -1725,34 +1720,18 @@ async function callHuggingFaceGenerateGlb(
 ): Promise<unknown> {
   const generateArgs = filterGradioEndpointArgs(
     gradio,
-    '/generate_3d',
+    '/generate_and_extract_glb',
     makePixal3dGenerateArgs(image, sessionId),
   )
   const generated = await withTimeout(
     gradio.predict(
-      '/generate_3d',
+      '/generate_and_extract_glb',
       generateArgs,
     ),
     HF_GENERATE_TIMEOUT_MS,
-    'Hugging Face Pixal3D generate_3d',
+    'Hugging Face TRELLIS generate_and_extract_glb',
   )
-  const statePath = findPixal3dStatePath(generated.data)
-  if (!statePath) throw new Error('Hugging Face Pixal3D generate_3d returned no state_path')
-
-  const extractArgs = filterGradioEndpointArgs(
-    gradio,
-    '/extract_glb_api',
-    makePixal3dExtractGlbArgs(statePath, sessionId),
-  )
-  const exported = await withTimeout(
-    gradio.predict(
-      '/extract_glb_api',
-      extractArgs,
-    ),
-    HF_GENERATE_TIMEOUT_MS,
-    'Hugging Face Pixal3D extract_glb_api',
-  )
-  return exported.data
+  return generated.data
 }
 
 async function callHuggingFacePreprocessImage(
@@ -1761,12 +1740,12 @@ async function callHuggingFacePreprocessImage(
 ): Promise<unknown> {
   const { handle_file } = await importGradioClient()
   const preprocessed = await withTimeout(
-    gradio.predict('/preprocess', { image: handle_file(makeGradioImageBlob(image)) }),
+    gradio.predict('/preprocess_image', { image: handle_file(makeGradioImageBlob(image)) }),
     HF_PREPROCESS_TIMEOUT_MS,
-    'Hugging Face Pixal3D preprocess',
+    'Hugging Face TRELLIS preprocess_image',
   )
   const imageForGeneration = unwrapSingleGradioOutput(preprocessed.data)
-  if (!imageForGeneration) throw new Error('Hugging Face Pixal3D preprocess returned no image')
+  if (!imageForGeneration) throw new Error('Hugging Face TRELLIS preprocess returned no image')
   return imageForGeneration
 }
 
@@ -1792,7 +1771,7 @@ async function requestHuggingFaceTrellisModel(
     const generated = await callHuggingFaceGenerateGlb(gradio, imageForGeneration, sessionId)
 
     const glbUrl = findGlbUrl(generated, pixal3d.baseUrl)
-    if (!glbUrl) throw new Error('Hugging Face Pixal3D response missing GLB URL')
+    if (!glbUrl) throw new Error('Hugging Face TRELLIS response missing GLB URL')
 
     await emitProgress(emit, 'trellis_upload', 90, 'Сохраняем 3D-модель')
     const modelUrl = await uploadModelFromUrl(
@@ -1800,7 +1779,7 @@ async function requestHuggingFaceTrellisModel(
       glbUrl,
       pixal3d.baseUrl,
       pixal3d.downloadHeaders,
-      'Hugging Face Pixal3D',
+      'Hugging Face TRELLIS',
     )
     return { modelUrl, format: 'glb', triangleCount: null }
   } finally {
@@ -2178,7 +2157,7 @@ async function streamAvatarGenerationJob(
 /**
  * POST /avatar/prepare-images
  * Runs KIE GPT Image 2 I2I and returns the generated 4:3 sheet plus the 3 PNG views
- * that will be sent into Pixal3D.
+ * that will be sent into TRELLIS.
  */
 avatarRouter.post('/prepare-images', async (c) => {
   const auth = await getAuthedUser(c.req.header('Authorization'))
@@ -2205,7 +2184,7 @@ avatarRouter.post('/prepare-images', async (c) => {
 
 /**
  * POST /avatar/generate-from-images
- * Generates a Pixal3D avatar from already prepared single/multi-image inputs.
+ * Generates a TRELLIS avatar from already prepared single/multi-image inputs.
  */
 avatarRouter.post('/generate-from-images', async (c) => {
   const auth = await getAuthedUser(c.req.header('Authorization'))
@@ -2311,7 +2290,7 @@ avatarRouter.get('/generation-status', async (c) => {
 
 /**
  * POST /avatar/generate
- * Создает аватар из уже сжатого fullbody photo через Pixal3D.
+ * Создает аватар из уже сжатого fullbody photo через TRELLIS.
  * Если worker не настроен или упал, сохраняет переданный procedural fallback.
  * Header: Authorization: Bearer <supabase-jwt>
  * Body: { fullbodyImage: dataUrl, fallbackConfig: AvatarConfig }
@@ -2365,7 +2344,7 @@ avatarRouter.post('/mirror-model', async (c) => {
   }
 
   if (!isAllowedTrellisModelUrl(body.modelUrl) || !body.modelUrl.toLowerCase().includes('.glb')) {
-    return c.json({ error: 'modelUrl must be a Pixal3D GLB file URL' }, 400)
+    return c.json({ error: 'modelUrl must be a TRELLIS GLB file URL' }, 400)
   }
 
   try {

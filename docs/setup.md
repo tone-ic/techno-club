@@ -204,7 +204,7 @@ SUPABASE_AVATAR_MODELS_BUCKET=avatar-models
 
 Worker должен отвечать на `POST /generate` по контракту из `docs/trellis.md`.
 
-Реальный image-to-3D локально имеет смысл запускать только на машине с NVIDIA GPU и достаточной VRAM. Если GPU нет, оставь `TRELLIS_WORKER_URL=` пустым: API попробует публичный Hugging Face Pixal3D Space. Для намеренного отключения GLB-генерации поставь `TRELLIS_WORKER_PROVIDER=disabled`.
+Реальный image-to-3D локально имеет смысл запускать только на машине с NVIDIA GPU и достаточной VRAM. Если GPU нет, оставь `TRELLIS_WORKER_URL=` пустым: API попробует публичный Hugging Face TRELLIS Space. Для намеренного отключения GLB-генерации поставь `TRELLIS_WORKER_PROVIDER=disabled`.
 
 ### Blender autorig локально
 
@@ -226,20 +226,19 @@ API Docker image устанавливает системный Blender и зап
 fly deploy -c apps/api/fly.toml
 ```
 
-### Pixal3D через Hugging Face Space для dev
+### TRELLIS через Hugging Face Space для dev
 
-Если локального GPU нет, можно временно использовать публичный Pixal3D-Server как dev-провайдер. API выбирает опубликованный `gradio.live` инстанс с минимальной очередью и сохраняет готовый GLB в Supabase:
+Если локального GPU нет, можно временно использовать публичный TRELLIS Space как dev-провайдер. API сохраняет готовый GLB в Supabase:
 
 ```env
 TRELLIS_WORKER_PROVIDER=huggingface
 TRELLIS_WORKER_URL=
 TRELLIS_WORKER_TOKEN=
-HF_PIXAL3D_SPACE_ID=TencentARC/Pixal3D-Server
-HF_PIXAL3D_INSTANCE_URLS=
+HF_TRELLIS_SPACE_ID=trellis-community/TRELLIS
 SUPABASE_AVATAR_MODELS_BUCKET=avatar-models
 ```
 
-GLB генерация использует `/preprocess`, `/generate_3d` и `/extract_glb_api`: resolution 1024, SS Guidance 10, SS Sampling 50, Shape Guidance 9, decimation target 1000000, texture size 2048, timeout 300 секунд на стадию.
+GLB генерация использует `/preprocess_image` и `/generate_and_extract_glb`: SS Guidance 10, SS Sampling 50, SLAT Guidance 9, SLAT Sampling 50, mesh simplify 0.9, texture size 2048, timeout 300 секунд на стадию.
 
 ---
 
