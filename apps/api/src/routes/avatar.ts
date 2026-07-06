@@ -1737,6 +1737,8 @@ async function callHuggingFaceGenerateGlb(
 async function callHuggingFacePreprocessImage(
   gradio: GradioClientInstance,
   image: string,
+  baseUrl: string,
+  downloadHeaders: Record<string, string>,
 ): Promise<unknown> {
   const { handle_file } = await importGradioClient()
   const preprocessed = await withTimeout(
@@ -1746,7 +1748,106 @@ async function callHuggingFacePreprocessImage(
   )
   const imageForGeneration = unwrapSingleGradioOutput(preprocessed.data)
   if (!imageForGeneration) throw new Error('Hugging Face TRELLIS preprocess returned no image')
-  return imageForGeneration
+  return reuploadGradioImageForGeneration(imageForGeneration, baseUrl, downloadHeaders)
+}
+
+async function reuploadGradioImageForGeneration(
+  image: unknown,
+  baseUrl: string,
+  downloadHeaders: Record<string, string>,
+): Promise<unknown> {
+  const fileUrl = findGradioFileUrl(image, baseUrl)
+  if (!fileUrl) return image
+
+  const { handle_file } = await importGradioClient()
+  const response = await fetchWithTimeout(
+    fileUrl,
+    { headers: downloadHeaders },
+    HF_PREPROCESS_TIMEOUT_MS,
+    'Hugging Face TRELLIS preprocessed image download',
+  )
+  if (!response.ok) {
+    const text = await response.text().catch(() => '')
+    throw new Error(`Hugging Face TRELLIS preprocessed image download failed: ${response.status} ${text}`.trim())
+  }
+
+  const contentType = response.headers.get('content-type') || getGradioMimeType(image) || 'image/png'
+  const bytes = await response.arrayBuffer()
+  return handle_file(new Blob([bytes], { type: contentType }))
+}
+
+function findGradioFileUrl(value: unknown, baseUrl: string): string | null {
+  if (!value) return null
+
+  if (typeof value === 'string') {
+    if (value.startsWith('data:image/')) return null
+    return resolveGradioFileUrl(value, baseUrl)
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findGradioFileUrl(item, baseUrl)
+      if (found) return found
+    }
+    return null
+  }
+
+  if (typeof value !== 'object') return null
+  const record = value as Record<string, unknown>
+  for (const key of ['url', 'path', 'name']) {
+    const candidate = record[key]
+    if (typeof candidate !== 'string' || !candidate) continue
+    const resolved = resolveGradioFileUrl(candidate, baseUrl)
+    if (resolved) return resolved
+  }
+
+  return null
+}
+
+function resolveGradioFileUrl(candidate: string, baseUrl: string): string | null {
+  if (/^https?:\/\//i.test(candidate)) return candidate
+  if (candidate.startsWith('/gradio_api/file=')) return new URL(candidate, baseUrl).toString()
+  if (candidate.startsWith('/file=')) return new URL(`/gradio_api${candidate}`, baseUrl).toString()
+  if (candidate.startsWith('/')) return new URL(`/gradio_api/file=${candidate}`, baseUrl).toString()
+  return null
+}
+
+function getGradioMimeType(value: unknown): string | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const mimeType = (value as Record<string, unknown>).mime_type
+  return typeof mimeType === 'string' && mimeType ? mimeType : null
+}
+
+async function callHuggingFaceGenerateImageGlb(
+  gradio: GradioClientInstance,
+  image: string,
+  sessionId: string,
+  baseUrl: string,
+  downloadHeaders: Record<string, string>,
+): Promise<{ generated: unknown; fallbackReason?: string }> {
+  const { handle_file } = await importGradioClient()
+  let directError: unknown = null
+
+  try {
+    return {
+      generated: await callHuggingFaceGenerateGlb(
+        gradio,
+        handle_file(makeGradioImageBlob(image)),
+        sessionId,
+      ),
+    }
+  } catch (error) {
+    directError = error
+    console.warn('[Avatar TRELLIS] prepared image input failed:', error instanceof Error ? error.message : error)
+  }
+
+  const imageForGeneration = await callHuggingFacePreprocessImage(gradio, image, baseUrl, downloadHeaders)
+  return {
+    generated: await callHuggingFaceGenerateGlb(gradio, imageForGeneration, sessionId),
+    fallbackReason: `Direct TRELLIS generation failed, used preprocess fallback: ${
+      directError instanceof Error ? directError.message : String(directError)
+    }`,
+  }
 }
 
 async function requestHuggingFaceTrellisModel(
@@ -1765,10 +1866,15 @@ async function requestHuggingFaceTrellisModel(
   try {
     const queueLabel = pixal3d.queueSize === null ? '' : `, очередь ${pixal3d.queueSize}`
     await emitProgress(emit, 'trellis_session', 65, `Запускаем очередь 3D-сборки${queueLabel}`)
-    await emitProgress(emit, 'trellis_preprocess', 70, 'Очищаем и нормализуем фото')
-    const imageForGeneration = await callHuggingFacePreprocessImage(gradio, firstImage)
     await emitProgress(emit, 'trellis_generate', 78, 'Собираем 3D-модель')
-    const generated = await callHuggingFaceGenerateGlb(gradio, imageForGeneration, sessionId)
+    const generation = await callHuggingFaceGenerateImageGlb(
+      gradio,
+      firstImage,
+      sessionId,
+      pixal3d.baseUrl,
+      pixal3d.downloadHeaders,
+    )
+    const generated = generation.generated
 
     const glbUrl = findGlbUrl(generated, pixal3d.baseUrl)
     if (!glbUrl) throw new Error('Hugging Face TRELLIS response missing GLB URL')

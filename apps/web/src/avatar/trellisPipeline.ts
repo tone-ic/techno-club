@@ -580,7 +580,7 @@ export async function generateBrowserTrellisAvatar(
   try {
     const pixal3d = await connectBrowserPixal3dClient()
     gradio = pixal3d.gradio
-    const singleImageGeneration = await generateHuggingFaceSingleImageGlb(gradio, fullbodyImage, sessionId)
+    const singleImageGeneration = await generateHuggingFaceSingleImageGlb(gradio, fullbodyImage, sessionId, pixal3d.baseUrl)
     const generated = singleImageGeneration.generated
 
     const temporaryModelUrl = findGlbUrl(generated.data, pixal3d.baseUrl)
@@ -639,8 +639,8 @@ export async function generateBrowserTrellisAvatarFromPreparedImages(
     const pixal3d = await connectBrowserPixal3dClient()
     gradio = pixal3d.gradio
     const sourceImage = makeGradioImageFile(firstImage, 'doorclub-fullbody.png')
-    const imageForGeneration = await preprocessHuggingFaceImage(gradio, sourceImage)
-    const generated = await generateHuggingFaceSingleImageResult(gradio, imageForGeneration, sessionId)
+    const singleImageGeneration = await generateHuggingFaceSingleImageResult(gradio, sourceImage, sessionId, pixal3d.baseUrl)
+    const generated = singleImageGeneration.generated
 
     const temporaryModelUrl = findGlbUrl(generated.data, pixal3d.baseUrl)
     if (!temporaryModelUrl) throw new Error('Hugging Face TRELLIS response missing GLB URL')
@@ -658,6 +658,7 @@ export async function generateBrowserTrellisAvatarFromPreparedImages(
         modelUrl: mirrored.modelUrl,
         format: mirrored.format,
         triangleCount: mirrored.triangleCount,
+        error: singleImageGeneration.fallbackReason,
       },
       autorig: mirrored.autorig,
     }
@@ -729,19 +730,16 @@ async function generateHuggingFaceSingleImageGlb(
   gradio: Awaited<ReturnType<typeof Client.connect>>,
   fullbodyImage: string,
   sessionId: string,
+  baseUrl: string,
 ) {
   const image = makeGradioImageFile(fullbodyImage, 'doorclub-fullbody.png')
-  const imageForGeneration = await preprocessHuggingFaceImage(gradio, image)
-
-  return {
-    generated: await generateHuggingFaceSingleImageResult(gradio, imageForGeneration, sessionId),
-    fallbackReason: undefined,
-  }
+  return generateHuggingFaceSingleImageResult(gradio, image, sessionId, baseUrl)
 }
 
 async function preprocessHuggingFaceImage(
   gradio: Awaited<ReturnType<typeof Client.connect>>,
   sourceImage: unknown,
+  baseUrl: string,
 ): Promise<unknown> {
   let preprocessed: Awaited<ReturnType<typeof gradio.predict>>
   try {
@@ -755,25 +753,102 @@ async function preprocessHuggingFaceImage(
     throw new Error('TRELLIS preprocess returned no image')
   }
 
-  return images[0]
+  return reuploadGradioImageForGeneration(images[0], baseUrl, 'doorclub-preprocessed.png')
+}
+
+async function reuploadGradioImageForGeneration(
+  image: unknown,
+  baseUrl: string,
+  fileName: string,
+): Promise<unknown> {
+  const fileUrl = findGradioFileUrl(image, baseUrl)
+  if (!fileUrl) return image
+
+  const response = await fetch(fileUrl)
+  if (!response.ok) {
+    throw new Error(`TRELLIS preprocessed image download failed: ${response.status}`)
+  }
+
+  const contentType = response.headers.get('content-type') || getGradioMimeType(image) || 'image/png'
+  const blob = await response.blob()
+  return handle_file(new File([blob], getGradioFileName(image) || fileName, { type: blob.type || contentType }))
+}
+
+function findGradioFileUrl(value: unknown, baseUrl: string): string | null {
+  if (!value) return null
+
+  if (typeof value === 'string') {
+    if (value.startsWith('data:image/')) return null
+    return resolveGradioFileUrl(value, baseUrl)
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findGradioFileUrl(item, baseUrl)
+      if (found) return found
+    }
+    return null
+  }
+
+  if (typeof value !== 'object') return null
+  const record = value as Record<string, unknown>
+  for (const key of ['url', 'path', 'name']) {
+    const candidate = record[key]
+    if (typeof candidate !== 'string' || !candidate) continue
+    const resolved = resolveGradioFileUrl(candidate, baseUrl)
+    if (resolved) return resolved
+  }
+
+  return null
+}
+
+function resolveGradioFileUrl(candidate: string, baseUrl: string): string | null {
+  if (/^https?:\/\//i.test(candidate)) return candidate
+  if (candidate.startsWith('/gradio_api/file=')) return new URL(candidate, baseUrl).toString()
+  if (candidate.startsWith('/file=')) return new URL(`/gradio_api${candidate}`, baseUrl).toString()
+  if (candidate.startsWith('/')) return new URL(`/gradio_api/file=${candidate}`, baseUrl).toString()
+  return null
+}
+
+function getGradioMimeType(value: unknown): string | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const mimeType = (value as Record<string, unknown>).mime_type
+  return typeof mimeType === 'string' && mimeType ? mimeType : null
+}
+
+function getGradioFileName(value: unknown): string | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const origName = (value as Record<string, unknown>).orig_name
+  return typeof origName === 'string' && origName ? origName : null
 }
 
 async function generateHuggingFaceSingleImageResult(
   gradio: BrowserGradioClient,
-  imageForGeneration: unknown,
+  sourceImage: unknown,
   sessionId: string,
+  baseUrl: string,
 ) {
   const generationInputs: Array<{
-    image: unknown
+    getImage: () => Promise<unknown>
     label: string
   }> = [
-    { image: imageForGeneration, label: 'single image input' },
+    { getImage: async () => sourceImage, label: 'prepared image input' },
+    {
+      getImage: async () => preprocessHuggingFaceImage(gradio, sourceImage, baseUrl),
+      label: 'preprocessed image fallback',
+    },
   ]
   let lastError: unknown = null
 
   for (const input of generationInputs) {
     try {
-      return await generateTrellisGlb(gradio, input.image, sessionId)
+      const generated = await generateTrellisGlb(gradio, await input.getImage(), sessionId)
+      return {
+        generated,
+        fallbackReason: input.label === 'preprocessed image fallback'
+          ? `Direct TRELLIS generation failed, used preprocess fallback: ${formatGradioError(lastError)}`
+          : undefined,
+      }
     } catch (error) {
       lastError = error
       console.warn(`[Avatar TRELLIS] ${input.label} failed:`, formatGradioError(error))
