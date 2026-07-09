@@ -38,15 +38,12 @@ const HF_PREPROCESS_TIMEOUT_MS = 90_000
 const HF_GENERATE_TIMEOUT_MS = 300_000
 const KIE_API_BASE_URL = process.env.KIE_API_BASE_URL || 'https://api.kie.ai'
 const KIE_FILE_UPLOAD_BASE_URL = process.env.KIE_FILE_UPLOAD_BASE_URL || 'https://kieai.redpandaai.co'
-const KIE_IMAGE_MODEL = process.env.KIE_IMAGE_MODEL || 'gpt-image-2-image-to-image'
 const KIE_IMAGE_PROMPT = process.env.KIE_IMAGE_PROMPT ||
   'сделай персонажа на фото без фона (на черном фоне) для последующего создания 3д модели (сохрани максимальную идентичность , не меняй внешность (одежду, черты тела и лица)). Персонаж должен быть в полный рост от головы до обуви, руки и кисти должны полностью помещаться в кадр. Если фото персонажа не видно полностью, дополни фото до полного роста и убери телефон из рук (если он имеется). Остальные аксессуары (сумка, часы, очки, украшения, головной убор) должны сохраниться с исходного фото. Руки должны быть в спокойном опущенном состоянии, слегка приподняты для лучшего последующего определения 3д модели. Лицо и взгляд персонажа должны быть направлены вперед'
 const KIE_IMAGE_ASPECT_RATIO = process.env.KIE_IMAGE_ASPECT_RATIO || '9:16'
-const KIE_OUTFIT_MODEL = process.env.KIE_OUTFIT_MODEL || 'gemini-3.1-pro'
 const KIE_CREATE_TIMEOUT_MS = Number(process.env.KIE_CREATE_TIMEOUT_MS || 45_000)
 const KIE_POLL_TIMEOUT_MS = Number(process.env.KIE_POLL_TIMEOUT_MS || 900_000)
 const KIE_DOWNLOAD_TIMEOUT_MS = Number(process.env.KIE_DOWNLOAD_TIMEOUT_MS || 90_000)
-const KIE_CHAT_TIMEOUT_MS = Number(process.env.KIE_CHAT_TIMEOUT_MS || 90_000)
 const AVATAR_MODELS_BUCKET = process.env.SUPABASE_AVATAR_MODELS_BUCKET || 'avatar-models'
 const TRELLIS_COMMUNITY_SPACE_ID = 'trellis-community/TRELLIS'
 const PIXAL3D_SERVER_SPACE_ID = 'TencentARC/Pixal3D-Server'
@@ -152,45 +149,9 @@ interface PrepareTrellisImagesBody {
   fullbodyImage: string
 }
 
-interface AnalyzeOutfitBody {
-  image: string
-}
-
 interface GeneratePreparedAvatarBody {
   trellisImages: string[]
   fallbackConfig: AvatarConfig
-}
-
-type GarmentPatternSize = 'S' | 'M' | 'L' | 'XL'
-type GarmentGenerationMode = 'extract' | 'pattern' | 'similar'
-
-interface OutfitDetectedItem {
-  number: number
-  title: string
-  category: string
-  summary: string
-  detailedDescription: string
-  colors: string[]
-  materials: string[]
-  fit: string
-  visibleFeatures: string[]
-  constructionNotes: string[]
-  searchKeywords: string[]
-  confidence: number
-}
-
-interface OutfitAnalysisResult {
-  model: string
-  overview: string
-  items: OutfitDetectedItem[]
-}
-
-interface GenerateGarmentImageBody {
-  mode: GarmentGenerationMode
-  sourceImage: string
-  item: OutfitDetectedItem
-  patternSize?: GarmentPatternSize
-  similarity?: number
 }
 
 interface MirrorModelBody {
@@ -210,16 +171,7 @@ interface TrellisModelResult {
 }
 
 interface ParsedImageDataUrl {
-  contentType: string
-  base64: string
   extension: string
-}
-
-interface KieImageTaskOptions {
-  prompt: string
-  aspectRatio: string
-  resolution?: string
-  model?: string
 }
 
 interface UploadedKieImage {
@@ -257,23 +209,6 @@ interface KieFileUploadResponse {
     fileUrl?: string
     downloadUrl?: string
   }
-}
-
-interface KieChatCompletionResponse {
-  choices?: Array<{
-    message?: {
-      content?: string | Array<{
-        type?: string
-        text?: string
-      }>
-    }
-  }>
-  error?: {
-    message?: string
-  }
-  code?: number
-  msg?: string
-  message?: string
 }
 
 interface AutorigResponse {
@@ -690,8 +625,6 @@ function parseImageDataUrl(dataUrl: string): ParsedImageDataUrl {
       : 'jpg'
 
   return {
-    contentType,
-    base64: match[2],
     extension,
   }
 }
@@ -788,47 +721,29 @@ function formatKieResponseError(
   return body.msg || body.message || fallback
 }
 
-function defaultKieImageTaskOptions(): KieImageTaskOptions {
-  return {
-    prompt: KIE_IMAGE_PROMPT,
-    aspectRatio: KIE_IMAGE_ASPECT_RATIO,
-    resolution: '1K',
-    model: KIE_IMAGE_MODEL,
-  }
-}
-
-function makeKieCreateTaskBody(
-  inputUrls: string[],
-  includeOutputFormat: boolean,
-  options: KieImageTaskOptions = defaultKieImageTaskOptions(),
-) {
+function makeKieCreateTaskBody(inputUrl: string, includeOutputFormat: boolean) {
   const input: Record<string, unknown> = {
-    prompt: options.prompt,
-    input_urls: inputUrls,
-    aspect_ratio: options.aspectRatio,
-    resolution: options.resolution ?? '1K',
+    prompt: KIE_IMAGE_PROMPT,
+    input_urls: [inputUrl],
+    aspect_ratio: KIE_IMAGE_ASPECT_RATIO,
+    resolution: '1K',
   }
 
   if (includeOutputFormat) input.output_format = 'png'
 
   return {
-    model: options.model ?? KIE_IMAGE_MODEL,
+    model: 'gpt-image-2-image-to-image',
     input,
   }
 }
 
-async function postKieCreateTask(
-  apiKey: string,
-  inputUrls: string[],
-  includeOutputFormat: boolean,
-  options?: KieImageTaskOptions,
-) {
+async function postKieCreateTask(apiKey: string, inputUrl: string, includeOutputFormat: boolean) {
   const response = await fetchWithTimeout(
     new URL('/api/v1/jobs/createTask', KIE_API_BASE_URL).toString(),
     {
       method: 'POST',
       headers: kieHeaders(apiKey),
-      body: JSON.stringify(makeKieCreateTaskBody(inputUrls, includeOutputFormat, options)),
+      body: JSON.stringify(makeKieCreateTaskBody(inputUrl, includeOutputFormat)),
     },
     KIE_CREATE_TIMEOUT_MS,
     'KIE GPT Image 2 task create',
@@ -838,14 +753,9 @@ async function postKieCreateTask(
   return { response, body }
 }
 
-async function createKieImageTask(
-  inputUrls: string | string[],
-  preferredApiKey?: string,
-  options?: KieImageTaskOptions,
-): Promise<{ taskId: string; apiKey: string }> {
+async function createKieImageTask(inputUrl: string, preferredApiKey?: string): Promise<{ taskId: string; apiKey: string }> {
   const keys = getKieApiKeys()
   if (!keys.length) throw new Error('KIE_API_KEYS is not configured')
-  const normalizedInputUrls = Array.isArray(inputUrls) ? inputUrls : [inputUrls]
 
   const orderedKeys = preferredApiKey
     ? [preferredApiKey, ...keys.filter((key) => key !== preferredApiKey)]
@@ -857,7 +767,7 @@ async function createKieImageTask(
     const apiKey = orderedKeys[(startIndex + attempt) % orderedKeys.length]
 
     for (const includeOutputFormat of [true, false]) {
-      const { response, body } = await postKieCreateTask(apiKey, normalizedInputUrls, includeOutputFormat, options)
+      const { response, body } = await postKieCreateTask(apiKey, inputUrl, includeOutputFormat)
       const code = body.code ?? response.status
       if (response.ok && code === 200 && body.data?.taskId) {
         const keyIndex = keys.indexOf(apiKey)
@@ -1032,283 +942,6 @@ async function prepareSingleModelPhoto(
     throw new Error('KIE_API_KEYS is not configured; add KIE_API_KEYS to API .env or set KIE_API_KEYS_FILE/kie.txt')
   }
   return generateKieSingleModelPhoto(sourceImage, emit)
-}
-
-function makeOutfitAnalysisPrompt() {
-  return [
-    'Analyze the uploaded photo and detect every visible clothing item and accessory worn or carried by the person.',
-    'Include tops, outerwear, bottoms, dresses, footwear, bags, belts, hats, glasses, jewelry, watches, gloves, scarves and other visible accessories.',
-    'Do not identify the person. Focus only on garments and accessories.',
-    'Return JSON only. Number every item starting from 1 in the order a user would scan the outfit from head to toe.',
-    'Use Russian text for user-facing descriptions.',
-    'Schema:',
-    '{ "overview": string, "items": [ { "number": number, "title": string, "category": string, "summary": string, "detailedDescription": string, "colors": string[], "materials": string[], "fit": string, "visibleFeatures": string[], "constructionNotes": string[], "searchKeywords": string[], "confidence": number } ] }',
-    'Make detailedDescription rich enough for image-to-image generation of that single item later: silhouette, cut, seams, closures, fabric look, proportions, visible texture, hardware, trim and any distinctive details.',
-  ].join('\n')
-}
-
-function makeKieChatCompletionsUrl(model: string) {
-  return new URL(`/${model.replace(/^\/+/, '')}/v1/chat/completions`, KIE_API_BASE_URL).toString()
-}
-
-function makeKieOutfitAnalysisBody(imageUrl: string) {
-  return {
-    messages: [{
-      role: 'user',
-      content: [
-        { type: 'text', text: makeOutfitAnalysisPrompt() },
-        { type: 'image_url', image_url: { url: imageUrl } },
-      ],
-    }],
-    stream: false,
-    reasoning_effort: 'high',
-  }
-}
-
-function extractKieChatText(body: KieChatCompletionResponse): string {
-  return (body.choices ?? [])
-    .map((choice) => choice.message?.content)
-    .flatMap((content) => {
-      if (typeof content === 'string') return [content]
-      if (Array.isArray(content)) {
-        return content
-          .map((part) => part.text)
-          .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
-      }
-      return []
-    })
-    .filter((value) => value.trim().length > 0)
-    .join('\n')
-}
-
-async function postKieOutfitAnalysis(apiKey: string, imageUrl: string) {
-  const response = await fetchWithTimeout(
-    makeKieChatCompletionsUrl(KIE_OUTFIT_MODEL),
-    {
-      method: 'POST',
-      headers: kieHeaders(apiKey),
-      body: JSON.stringify(makeKieOutfitAnalysisBody(imageUrl)),
-    },
-    KIE_CHAT_TIMEOUT_MS,
-    'KIE Gemini outfit analysis',
-  )
-
-  const body = await response.json().catch(() => ({} as KieChatCompletionResponse)) as KieChatCompletionResponse
-  return { response, body }
-}
-
-async function analyzeOutfitWithKieGemini(image: string): Promise<OutfitAnalysisResult> {
-  const keys = getKieApiKeys()
-  if (!keys.length) {
-    throw new Error('KIE_API_KEYS is not configured; add KIE_API_KEYS to API .env or set KIE_API_KEYS_FILE/kie.txt')
-  }
-
-  const uploaded = await uploadKieInputImageDataUrl(image)
-  const orderedKeys = [uploaded.apiKey, ...keys.filter((key) => key !== uploaded.apiKey)]
-  let lastError = 'KIE Gemini outfit analysis failed'
-
-  for (const apiKey of orderedKeys) {
-    const { response, body } = await postKieOutfitAnalysis(apiKey, uploaded.url)
-    if (!response.ok || body.error || (typeof body.code === 'number' && body.code >= 400)) {
-      lastError = body.error?.message
-        || body.msg
-        || body.message
-        || `KIE Gemini outfit analysis failed: ${response.status}`
-      continue
-    }
-
-    const text = extractKieChatText(body)
-    if (!text) {
-      lastError = 'KIE Gemini outfit analysis returned no text'
-      continue
-    }
-
-    return normalizeOutfitAnalysis(parseModelJson(text))
-  }
-
-  throw new Error(lastError)
-}
-
-function parseModelJson(text: string): unknown {
-  const withoutFence = text
-    .trim()
-    .replace(/^```(?:json)?\s*/i, '')
-    .replace(/\s*```$/i, '')
-    .trim()
-  const start = withoutFence.indexOf('{')
-  const end = withoutFence.lastIndexOf('}')
-  const jsonText = start >= 0 && end > start ? withoutFence.slice(start, end + 1) : withoutFence
-  return JSON.parse(jsonText)
-}
-
-function normalizeOutfitAnalysis(value: unknown): OutfitAnalysisResult {
-  if (!value || typeof value !== 'object') {
-    throw new Error('Gemini outfit analysis returned invalid JSON')
-  }
-
-  const record = value as Record<string, unknown>
-  const rawItems = Array.isArray(record.items) ? record.items : []
-  const items = rawItems
-    .map((item, index) => normalizeOutfitItem(item, index))
-    .filter((item): item is OutfitDetectedItem => Boolean(item))
-    .sort((a, b) => a.number - b.number)
-
-  if (!items.length) throw new Error('Gemini did not detect any clothing items or accessories')
-
-  return {
-    model: KIE_OUTFIT_MODEL,
-    overview: stringFromUnknown(record.overview, 'Найдены элементы образа на фото.'),
-    items,
-  }
-}
-
-function normalizeOutfitItem(value: unknown, index: number): OutfitDetectedItem | null {
-  if (!value || typeof value !== 'object') return null
-
-  const record = value as Record<string, unknown>
-  const title = stringFromUnknown(record.title, '')
-  const category = stringFromUnknown(record.category, 'Одежда')
-  const detailedDescription = stringFromUnknown(
-    record.detailedDescription,
-    stringFromUnknown(record.description, stringFromUnknown(record.summary, '')),
-  )
-
-  if (!title && !detailedDescription) return null
-
-  const number = Number(record.number)
-  const confidence = Number(record.confidence)
-  const normalizedConfidence = Number.isFinite(confidence)
-    ? Math.max(0, Math.min(1, confidence > 1 ? confidence / 100 : confidence))
-    : 0.75
-
-  return {
-    number: Number.isFinite(number) && number > 0 ? Math.round(number) : index + 1,
-    title: title || `${category} ${index + 1}`,
-    category,
-    summary: stringFromUnknown(record.summary, detailedDescription || title),
-    detailedDescription: detailedDescription || title,
-    colors: stringArrayFromUnknown(record.colors),
-    materials: stringArrayFromUnknown(record.materials),
-    fit: stringFromUnknown(record.fit, 'Посадка неочевидна по фото'),
-    visibleFeatures: stringArrayFromUnknown(record.visibleFeatures),
-    constructionNotes: stringArrayFromUnknown(record.constructionNotes),
-    searchKeywords: stringArrayFromUnknown(record.searchKeywords),
-    confidence: normalizedConfidence,
-  }
-}
-
-function stringFromUnknown(value: unknown, fallback: string) {
-  return typeof value === 'string' && value.trim() ? value.trim() : fallback
-}
-
-function stringArrayFromUnknown(value: unknown): string[] {
-  if (Array.isArray(value)) {
-    return value
-      .map((item) => typeof item === 'string' ? item.trim() : '')
-      .filter(Boolean)
-  }
-
-  if (typeof value === 'string' && value.trim()) return [value.trim()]
-  return []
-}
-
-function isGarmentGenerationMode(value: unknown): value is GarmentGenerationMode {
-  return value === 'extract' || value === 'pattern' || value === 'similar'
-}
-
-function isGarmentPatternSize(value: unknown): value is GarmentPatternSize {
-  return value === 'S' || value === 'M' || value === 'L' || value === 'XL'
-}
-
-function clampSimilarity(value: unknown) {
-  const numeric = Number(value)
-  if (!Number.isFinite(numeric)) return 70
-  return Math.max(0, Math.min(100, Math.round(numeric)))
-}
-
-function formatGarmentDetails(item: OutfitDetectedItem) {
-  return [
-    `Item #${item.number}: ${item.title}`,
-    `Category: ${item.category}`,
-    `Summary: ${item.summary}`,
-    `Detailed description: ${item.detailedDescription}`,
-    item.colors.length ? `Colors: ${item.colors.join(', ')}` : '',
-    item.materials.length ? `Materials: ${item.materials.join(', ')}` : '',
-    `Fit: ${item.fit}`,
-    item.visibleFeatures.length ? `Visible features: ${item.visibleFeatures.join('; ')}` : '',
-    item.constructionNotes.length ? `Construction notes: ${item.constructionNotes.join('; ')}` : '',
-  ].filter(Boolean).join('\n')
-}
-
-function buildGarmentGenerationPrompt(body: GenerateGarmentImageBody): { prompt: string; aspectRatio: '1:1' | '16:9' } {
-  const details = formatGarmentDetails(body.item)
-
-  if (body.mode === 'pattern') {
-    const size = isGarmentPatternSize(body.patternSize) ? body.patternSize : 'M'
-    return {
-      aspectRatio: '16:9',
-      prompt: [
-        'Using the uploaded isolated garment image as the visual reference, create one clean technical pattern sheet for sewing.',
-        `Target size: ${size}.`,
-        'White background, black/dark gray drafting lines, all pattern pieces arranged on one single 16:9 image.',
-        'Label every pattern piece and write all measurements in millimeters. Include seam allowances, grain lines, fold lines, notches, darts, closures, pockets, collar/cuffs/waistband/straps when relevant.',
-        'Fit all elements in the frame. Make the image crisp, readable, orthographic and blueprint-like, without a person, mannequin, hanger, room, shadows or decorative styling.',
-        'Base the pattern on this garment:',
-        details,
-      ].join('\n'),
-    }
-  }
-
-  if (body.mode === 'similar') {
-    const similarity = clampSimilarity(body.similarity)
-    return {
-      aspectRatio: '1:1',
-      prompt: [
-        'Using the uploaded isolated garment image as the visual reference, generate one similar clothing item as a hyperrealistic product photo.',
-        `Similarity level: ${similarity} out of 100. 100 means almost identical with small refinements; 50 means clearly inspired by the source; 0 means only loosely related by category.`,
-        'White background, centered single garment only, no person, no mannequin, no hanger, no extra props, no text, no logos unless visibly present in the source.',
-        'Preserve realistic fabric physics, stitching, hardware, seams and proportions. Studio e-commerce lighting. Square 1:1 composition.',
-        'Source garment description:',
-        details,
-      ].join('\n'),
-    }
-  }
-
-  return {
-    aspectRatio: '1:1',
-    prompt: [
-      'Using the uploaded full-body photo as the visual reference, extract and recreate only the selected garment/accessory as a separate isolated product photo.',
-      'Generate a hyperrealistic e-commerce product shot on a pure white background, centered, square 1:1.',
-      'Only the selected item must appear. Remove the person, body, face, hands, hair, other clothes, other accessories, background, hangers, mannequins and props.',
-      'Preserve the visible cut, silhouette, fabric texture, color, seams, closures, hardware and distinctive details. Do not invent brand logos.',
-      'Selected item description:',
-      details,
-    ].join('\n'),
-  }
-}
-
-async function generateGarmentImageWithKie(body: GenerateGarmentImageBody) {
-  if (!getKieApiKeys().length) {
-    throw new Error('KIE_API_KEYS is not configured; add KIE_API_KEYS to API .env or set KIE_API_KEYS_FILE/kie.txt')
-  }
-
-  const generation = buildGarmentGenerationPrompt(body)
-  const uploaded = await uploadKieInputImageDataUrl(body.sourceImage)
-  const { taskId, apiKey } = await createKieImageTask(uploaded.url, uploaded.apiKey, {
-    prompt: generation.prompt,
-    aspectRatio: generation.aspectRatio,
-    resolution: '1K',
-    model: KIE_IMAGE_MODEL,
-  })
-  const resultUrl = await pollKieImageTask(taskId, apiKey)
-  const image = await downloadKiePng(resultUrl)
-
-  return {
-    mode: body.mode,
-    image: imageBufferToDataUrl(image, 'image/png'),
-    aspectRatio: generation.aspectRatio,
-    prompt: generation.prompt,
-  }
 }
 
 function areImageDataUrls(images: string[]): boolean {
@@ -2626,70 +2259,6 @@ async function streamAvatarGenerationJob(
     }, 500)
   })
 }
-
-/**
- * POST /avatar/analyze-outfit
- * Runs KIE Gemini vision analysis and returns numbered clothing/accessory items.
- */
-avatarRouter.post('/analyze-outfit', async (c) => {
-  const auth = await getAuthedUser(c.req.header('Authorization'))
-  if (!auth.user) return c.json({ error: auth.error }, 401)
-
-  const body = await c.req.json<AnalyzeOutfitBody>().catch(() => null)
-  if (!body?.image) {
-    return c.json({ error: 'image required' }, 400)
-  }
-
-  if (!isImageDataUrl(body.image) || body.image.length > MAX_IMAGE_DATA_URL_BYTES) {
-    return c.json({ error: 'image must be a compressed image data URL' }, 400)
-  }
-
-  try {
-    return c.json({ analysis: await analyzeOutfitWithKieGemini(body.image) })
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Outfit analysis failed'
-    console.error('[Avatar KIE Gemini] Outfit analysis error:', message)
-    return c.json({ error: message }, 500)
-  }
-})
-
-/**
- * POST /avatar/generate-garment-image
- * Runs KIE GPT Image 2 image-to-image for selected item extraction, patterns and similar items.
- */
-avatarRouter.post('/generate-garment-image', async (c) => {
-  const auth = await getAuthedUser(c.req.header('Authorization'))
-  if (!auth.user) return c.json({ error: auth.error }, 401)
-
-  const body = await c.req.json<GenerateGarmentImageBody>().catch(() => null)
-  if (!body?.sourceImage || !isGarmentGenerationMode(body.mode)) {
-    return c.json({ error: 'mode and sourceImage required' }, 400)
-  }
-
-  if (!isImageDataUrl(body.sourceImage) || body.sourceImage.length > MAX_IMAGE_DATA_URL_BYTES) {
-    return c.json({ error: 'sourceImage must be a compressed image data URL' }, 400)
-  }
-
-  const item = normalizeOutfitItem(body.item, 0)
-  if (!item) return c.json({ error: 'item invalid' }, 400)
-
-  if (body.mode === 'pattern' && body.patternSize && !isGarmentPatternSize(body.patternSize)) {
-    return c.json({ error: 'patternSize must be S, M, L or XL' }, 400)
-  }
-
-  try {
-    return c.json(await generateGarmentImageWithKie({
-      ...body,
-      item,
-      patternSize: body.mode === 'pattern' && isGarmentPatternSize(body.patternSize) ? body.patternSize : undefined,
-      similarity: body.mode === 'similar' ? clampSimilarity(body.similarity) : undefined,
-    }))
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Garment image generation failed'
-    console.error('[Avatar KIE] Garment generation error:', message)
-    return c.json({ error: message }, 500)
-  }
-})
 
 /**
  * POST /avatar/prepare-images

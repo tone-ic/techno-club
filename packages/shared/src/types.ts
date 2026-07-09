@@ -59,48 +59,6 @@ export interface AvatarConfig {
   autorig?: AvatarAutorigInfo | null
 }
 
-// ─── Анализ одежды ───────────────────────────────────────────────────────────
-
-export type GarmentPatternSize = 'S' | 'M' | 'L' | 'XL'
-
-export type GarmentGenerationMode = 'extract' | 'pattern' | 'similar'
-
-export interface OutfitDetectedItem {
-  number: number
-  title: string
-  category: string
-  summary: string
-  detailedDescription: string
-  colors: string[]
-  materials: string[]
-  fit: string
-  visibleFeatures: string[]
-  constructionNotes: string[]
-  searchKeywords: string[]
-  confidence: number
-}
-
-export interface OutfitAnalysisResult {
-  model: string
-  overview: string
-  items: OutfitDetectedItem[]
-}
-
-export interface GarmentImageGenerationRequest {
-  mode: GarmentGenerationMode
-  sourceImage: string
-  item: OutfitDetectedItem
-  patternSize?: GarmentPatternSize
-  similarity?: number
-}
-
-export interface GarmentImageGenerationResult {
-  mode: GarmentGenerationMode
-  image: string
-  aspectRatio: '1:1' | '16:9'
-  prompt: string
-}
-
 export const DEFAULT_AVATAR_CONFIG: AvatarConfig = {
   bodyTextureUrl: null,
   bodyId: 'body_01',

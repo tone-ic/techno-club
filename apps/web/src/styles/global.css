@@ -41,11 +41,6 @@ button {
   -webkit-touch-callout: none;
 }
 
-button:disabled {
-  cursor: default;
-  opacity: 0.52;
-}
-
 input, textarea {
   font-family: var(--font-mono);
   background: var(--color-bg-2);
@@ -78,19 +73,4 @@ input:focus, textarea:focus {
 
 .music-volume-slider:focus {
   border: 0;
-}
-
-.fashion-spinner {
-  width: 34px;
-  height: 34px;
-  border-radius: 50%;
-  border: 3px solid rgba(0, 229, 255, 0.18);
-  border-top-color: #00e5ff;
-  animation: fashion-spin 0.85s linear infinite;
-}
-
-@keyframes fashion-spin {
-  to {
-    transform: rotate(360deg);
-  }
 }

@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
 import { useNavigate } from 'react-router-dom'
-import type { AvatarConfig, GarmentPatternSize, OutfitAnalysisResult, OutfitDetectedItem } from '@shared/types'
-import { analyzeOutfit, generateGarmentImage } from '@/avatar/fashionPipeline'
+import type { AvatarConfig } from '@shared/types'
 import {
   generateNoAiAvatar,
   compressCameraPhoto,
@@ -18,13 +17,12 @@ import AvatarPreview3D from '@/components/AvatarPreview3D'
 import { usePlayerStore } from '@/store/playerStore'
 import { supabase } from '@/utils/supabase'
 
-type Step = 'intro' | 'fullbody' | 'review' | 'outfitAnalyzing' | 'wardrobe' | 'generating' | 'preview' | 'saving'
+type Step = 'intro' | 'fullbody' | 'review' | 'generating' | 'preview' | 'saving'
 type CameraFacing = 'user' | 'environment'
 type TrellisNotice = {
   tone: 'pending' | 'success' | 'warning'
   message: string
 } | null
-type ImageGenerationStatus = 'idle' | 'loading' | 'success' | 'error'
 
 interface Photos {
   fullbody: string | null
@@ -39,25 +37,6 @@ interface GenerationProcess {
   kieImage: string | null
   progress: number
   message: string
-}
-
-interface ImageGenerationState {
-  status: ImageGenerationStatus
-  image: string | null
-  error: string | null
-}
-
-type ItemImageMap = Record<number, ImageGenerationState>
-type PatternImageMap = Record<number, Partial<Record<GarmentPatternSize, ImageGenerationState>>>
-
-const PATTERN_SIZES: GarmentPatternSize[] = ['S', 'M', 'L', 'XL']
-
-function idleImageState(): ImageGenerationState {
-  return { status: 'idle', image: null, error: null }
-}
-
-function loadingImageState(): ImageGenerationState {
-  return { status: 'loading', image: null, error: null }
 }
 
 async function attachStreamToVideo(video: HTMLVideoElement, stream: MediaStream): Promise<boolean> {
@@ -124,13 +103,6 @@ export default function CameraPage() {
   const [step, setStep] = useState<Step>('intro')
   const [photos, setPhotos] = useState<Photos>({ fullbody: null, face: null })
   const [generated, setGenerated] = useState<AvatarConfig | null>(null)
-  const [outfitAnalysis, setOutfitAnalysis] = useState<OutfitAnalysisResult | null>(null)
-  const [selectedItemNumber, setSelectedItemNumber] = useState<number | null>(null)
-  const [itemImages, setItemImages] = useState<ItemImageMap>({})
-  const [patternImages, setPatternImages] = useState<PatternImageMap>({})
-  const [similarImages, setSimilarImages] = useState<ItemImageMap>({})
-  const [patternSize, setPatternSize] = useState<GarmentPatternSize>('M')
-  const [similarity, setSimilarity] = useState(70)
   const [error, setError] = useState<string | null>(null)
   const [trellisNotice, setTrellisNotice] = useState<TrellisNotice>(null)
   const [generationProcess, setGenerationProcess] = useState<GenerationProcess>({
@@ -163,16 +135,6 @@ export default function CameraPage() {
   useEffect(() => {
     return () => stream?.getTracks().forEach((track) => track.stop())
   }, [stream])
-
-  const resetOutfitState = useCallback(() => {
-    setOutfitAnalysis(null)
-    setSelectedItemNumber(null)
-    setItemImages({})
-    setPatternImages({})
-    setSimilarImages({})
-    setPatternSize('M')
-    setSimilarity(70)
-  }, [])
 
   const startCamera = useCallback(async (facing: CameraFacing) => {
     stopStream()
@@ -262,12 +224,11 @@ export default function CameraPage() {
 
     stopStream()
     setGenerated(null)
-    resetOutfitState()
     setTrellisNotice(null)
     setGenerationProcess({ stage: 'source', sourceImage: null, kieImage: null, progress: 0, message: 'Готовим фото' })
     setPhotos({ fullbody: normalizedFullbody, face: normalizedFace })
     setStep('review')
-  }, [resetOutfitState, stopStream])
+  }, [stopStream])
 
   const handleCapture = useCallback(async () => {
     const dataUrl = takePhoto()
@@ -355,144 +316,6 @@ export default function CameraPage() {
     }
   }, [photos.face, photos.fullbody])
 
-  const handleAnalyzeOutfit = useCallback(async () => {
-    const fullbodyPhoto = photos.fullbody
-    if (!fullbodyPhoto) return
-
-    setStep('outfitAnalyzing')
-    setError(null)
-    resetOutfitState()
-
-    try {
-      const analysis = await analyzeOutfit(fullbodyPhoto)
-      setOutfitAnalysis(analysis)
-      setSelectedItemNumber(analysis.items[0]?.number ?? null)
-      setStep('wardrobe')
-    } catch (analysisError) {
-      const message = analysisError instanceof Error ? analysisError.message : 'Не удалось проанализировать одежду'
-      setError(cleanGenerationDetails(message))
-      setStep('review')
-    }
-  }, [photos.fullbody, resetOutfitState])
-
-  const ensureGarmentExtract = useCallback(async (item: OutfitDetectedItem) => {
-    const sourceImage = photos.fullbody
-    if (!sourceImage) return
-
-    const existing = itemImages[item.number]
-    if (existing?.status === 'loading' || existing?.status === 'success') return
-
-    setItemImages((current) => ({
-      ...current,
-      [item.number]: loadingImageState(),
-    }))
-
-    try {
-      const result = await generateGarmentImage({
-        mode: 'extract',
-        sourceImage,
-        item,
-      })
-      setItemImages((current) => ({
-        ...current,
-        [item.number]: { status: 'success', image: result.image, error: null },
-      }))
-    } catch (generationError) {
-      const message = generationError instanceof Error ? generationError.message : 'Не удалось создать фото изделия'
-      setItemImages((current) => ({
-        ...current,
-        [item.number]: { status: 'error', image: null, error: cleanGenerationDetails(message) },
-      }))
-    }
-  }, [itemImages, photos.fullbody])
-
-  const handleSelectOutfitItem = useCallback((item: OutfitDetectedItem) => {
-    setSelectedItemNumber(item.number)
-    setError(null)
-    void ensureGarmentExtract(item)
-  }, [ensureGarmentExtract])
-
-  const handleGeneratePattern = useCallback(async () => {
-    const item = outfitAnalysis?.items.find((candidate) => candidate.number === selectedItemNumber)
-    if (!item) return
-
-    const itemImage = itemImages[item.number]
-    if (itemImage?.status !== 'success' || !itemImage.image) {
-      setError('Сначала нужно сгенерировать отдельное фото изделия')
-      return
-    }
-
-    setError(null)
-    setPatternImages((current) => ({
-      ...current,
-      [item.number]: {
-        ...(current[item.number] ?? {}),
-        [patternSize]: loadingImageState(),
-      },
-    }))
-
-    try {
-      const result = await generateGarmentImage({
-        mode: 'pattern',
-        sourceImage: itemImage.image,
-        item,
-        patternSize,
-      })
-      setPatternImages((current) => ({
-        ...current,
-        [item.number]: {
-          ...(current[item.number] ?? {}),
-          [patternSize]: { status: 'success', image: result.image, error: null },
-        },
-      }))
-    } catch (generationError) {
-      const message = generationError instanceof Error ? generationError.message : 'Не удалось создать лекала'
-      setPatternImages((current) => ({
-        ...current,
-        [item.number]: {
-          ...(current[item.number] ?? {}),
-          [patternSize]: { status: 'error', image: null, error: cleanGenerationDetails(message) },
-        },
-      }))
-    }
-  }, [itemImages, outfitAnalysis?.items, patternSize, selectedItemNumber])
-
-  const handleGenerateSimilar = useCallback(async () => {
-    const item = outfitAnalysis?.items.find((candidate) => candidate.number === selectedItemNumber)
-    if (!item) return
-
-    const itemImage = itemImages[item.number]
-    if (itemImage?.status !== 'success' || !itemImage.image) {
-      setError('Сначала нужно сгенерировать отдельное фото изделия')
-      return
-    }
-
-    setError(null)
-    setSimilarImages((current) => ({
-      ...current,
-      [item.number]: loadingImageState(),
-    }))
-
-    try {
-      const result = await generateGarmentImage({
-        mode: 'similar',
-        sourceImage: itemImage.image,
-        item,
-        similarity,
-      })
-      setSimilarImages((current) => ({
-        ...current,
-        [item.number]: { status: 'success', image: result.image, error: null },
-      }))
-    } catch (generationError) {
-      const message = generationError instanceof Error ? generationError.message : 'Не удалось создать похожее изделие'
-      setSimilarImages((current) => ({
-        ...current,
-        [item.number]: { status: 'error', image: null, error: cleanGenerationDetails(message) },
-      }))
-    }
-  }, [itemImages, outfitAnalysis?.items, selectedItemNumber, similarity])
-
   const handleConfirm = useCallback(async () => {
     if (!photos.fullbody || !userId) return
     const facePhoto = photos.face ?? photos.fullbody
@@ -534,29 +357,21 @@ export default function CameraPage() {
     stopStream()
     setPhotos({ fullbody: null, face: null })
     setGenerated(null)
-    resetOutfitState()
     setError(null)
     setTrellisNotice(null)
     setGenerationProcess({ stage: 'source', sourceImage: null, kieImage: null, progress: 0, message: 'Готовим фото' })
     setCameraFacing('environment')
     setStep('intro')
-  }, [resetOutfitState, stopStream])
-
-  const selectedItem = outfitAnalysis?.items.find((item) => item.number === selectedItemNumber) ?? null
-  const selectedItemImage = selectedItem ? itemImages[selectedItem.number] ?? idleImageState() : idleImageState()
-  const selectedPatternImage = selectedItem
-    ? patternImages[selectedItem.number]?.[patternSize] ?? idleImageState()
-    : idleImageState()
-  const selectedSimilarImage = selectedItem ? similarImages[selectedItem.number] ?? idleImageState() : idleImageState()
+  }, [stopStream])
 
   if (step === 'intro') {
     return (
       <Screen>
         <div style={{ marginTop: 52 }} />
         <Brand />
-        <div style={styles.title}>Исследуй одежду</div>
+        <div style={styles.title}>Создай аватар</div>
         <div style={{ ...styles.copy, maxWidth: 320, marginTop: 10 }}>
-          Загрузи фото в полный рост: Gemini пронумерует одежду и аксессуары, а GPT Image 2 подготовит отдельные изделия.
+          Нужен один кадр в полный рост. Система сама найдёт силуэт и лицо, а затем превратит фото в стилизованную 3D-модель.
         </div>
         <div style={{ ...styles.copy, marginTop: 18, fontSize: 11, color: '#555' }}>
           Оригинальные фото не публикуются
@@ -579,9 +394,9 @@ export default function CameraPage() {
       <Screen>
         <StepDots step={step} photos={photos} />
         <Brand text="ШАГ 1 из 1" />
-        <div style={styles.title}>Фото образа</div>
+        <div style={styles.title}>Полный рост</div>
         <div style={styles.copy}>
-          Лучше всего работает кадр, где человек и детали одежды видны целиком
+          Встань прямо: система сама найдёт силуэт тела и лицо
         </div>
         {error && <div style={styles.error}>{error}</div>}
 
@@ -642,51 +457,8 @@ export default function CameraPage() {
           />
         </div>
         {error && <div style={styles.error}>{error}</div>}
-        <button style={styles.primaryButton} onClick={handleAnalyzeOutfit}>АНАЛИЗИРОВАТЬ ОДЕЖДУ</button>
-        <button style={styles.ghostButton} onClick={handleGenerate}>Создать 3D аватар</button>
+        <button style={styles.primaryButton} onClick={handleGenerate}>СОЗДАТЬ 3D АВАТАР</button>
         <button style={styles.ghostButton} onClick={resetFlow}>Переснять всё</button>
-      </Screen>
-    )
-  }
-
-  if (step === 'outfitAnalyzing') {
-    return (
-      <Screen>
-        <div style={{ marginTop: 48 }} />
-        <Brand />
-        <div style={styles.title}>Анализируем образ</div>
-        <div style={{ ...styles.copy, marginTop: 12 }}>
-          Gemini выделяет все элементы одежды и аксессуары
-        </div>
-        <OutfitAnalysisLoading sourceImage={photos.fullbody} />
-      </Screen>
-    )
-  }
-
-  if (step === 'wardrobe' && outfitAnalysis) {
-    return (
-      <Screen>
-        <Brand />
-        <div style={styles.title}>Элементы образа</div>
-        <div style={{ ...styles.copy, maxWidth: 760 }}>{outfitAnalysis.overview}</div>
-        {error && <div style={styles.error}>{error}</div>}
-        <FashionWorkspace
-          analysis={outfitAnalysis}
-          sourceImage={photos.fullbody}
-          selectedItem={selectedItem}
-          selectedItemImage={selectedItemImage}
-          selectedPatternImage={selectedPatternImage}
-          selectedSimilarImage={selectedSimilarImage}
-          patternSize={patternSize}
-          similarity={similarity}
-          onSelectItem={handleSelectOutfitItem}
-          onPatternSizeChange={setPatternSize}
-          onSimilarityChange={setSimilarity}
-          onGeneratePattern={handleGeneratePattern}
-          onGenerateSimilar={handleGenerateSimilar}
-          onBackToPhoto={() => setStep('review')}
-          onReset={resetFlow}
-        />
       </Screen>
     )
   }
@@ -860,224 +632,6 @@ function GenerationProcessView({ process }: { process: GenerationProcess }) {
   )
 }
 
-function OutfitAnalysisLoading({ sourceImage }: { sourceImage: string | null }) {
-  return (
-    <div style={styles.analysisLoading}>
-      {sourceImage && <img src={sourceImage} alt="исходное фото" style={styles.analysisSourceImage} />}
-      <div style={styles.loadingStack}>
-        <div className="fashion-spinner" />
-        <div style={styles.pipelinePlaceholder}>Готовим нумерованный список изделий</div>
-      </div>
-    </div>
-  )
-}
-
-function FashionWorkspace({
-  analysis,
-  sourceImage,
-  selectedItem,
-  selectedItemImage,
-  selectedPatternImage,
-  selectedSimilarImage,
-  patternSize,
-  similarity,
-  onSelectItem,
-  onPatternSizeChange,
-  onSimilarityChange,
-  onGeneratePattern,
-  onGenerateSimilar,
-  onBackToPhoto,
-  onReset,
-}: {
-  analysis: OutfitAnalysisResult
-  sourceImage: string | null
-  selectedItem: OutfitDetectedItem | null
-  selectedItemImage: ImageGenerationState
-  selectedPatternImage: ImageGenerationState
-  selectedSimilarImage: ImageGenerationState
-  patternSize: GarmentPatternSize
-  similarity: number
-  onSelectItem: (item: OutfitDetectedItem) => void
-  onPatternSizeChange: (size: GarmentPatternSize) => void
-  onSimilarityChange: (value: number) => void
-  onGeneratePattern: () => void
-  onGenerateSimilar: () => void
-  onBackToPhoto: () => void
-  onReset: () => void
-}) {
-  const productReady = selectedItemImage.status === 'success' && Boolean(selectedItemImage.image)
-
-  return (
-    <div style={styles.wardrobeLayout}>
-      <div style={styles.outfitColumn}>
-        {sourceImage && <img src={sourceImage} alt="исходное фото" style={styles.sourcePreviewImage} />}
-        <div style={styles.outfitList}>
-          {analysis.items.map((item) => {
-            const active = selectedItem?.number === item.number
-            return (
-              <button
-                key={item.number}
-                style={{ ...styles.outfitButton, ...(active ? styles.outfitButtonActive : {}) }}
-                onClick={() => onSelectItem(item)}
-              >
-                <span style={styles.itemNumberBadge}>{item.number}</span>
-                <span style={styles.itemButtonText}>
-                  <span style={styles.itemTitle}>{item.title}</span>
-                  <span style={styles.itemMeta}>{item.category}</span>
-                </span>
-              </button>
-            )
-          })}
-        </div>
-      </div>
-
-      <div style={styles.detailColumn}>
-        {selectedItem ? (
-          <>
-            <div style={styles.detailHeader}>
-              <div>
-                <div style={styles.detailTitle}>#{selectedItem.number} {selectedItem.title}</div>
-                <div style={styles.itemMeta}>{selectedItem.category} · уверенность {Math.round(selectedItem.confidence * 100)}%</div>
-              </div>
-            </div>
-
-            <div style={styles.detailGrid}>
-              <div style={styles.infoPanel}>
-                <div style={styles.detailSectionTitle}>Описание</div>
-                <div style={styles.detailText}>{selectedItem.detailedDescription}</div>
-                <DetailTags label="Цвета" values={selectedItem.colors} />
-                <DetailTags label="Материалы" values={selectedItem.materials} />
-                <DetailTags label="Детали" values={selectedItem.visibleFeatures} />
-                <DetailTags label="Конструкция" values={selectedItem.constructionNotes} />
-              </div>
-
-              <GeneratedImagePanel
-                title="Фото изделия"
-                state={selectedItemImage}
-                aspect="square"
-                idleText="Нажми элемент в списке, чтобы создать отдельное фото"
-              />
-            </div>
-
-            <div style={styles.generationGrid}>
-              <div style={styles.toolPanel}>
-                <div style={styles.detailSectionTitle}>Лекала</div>
-                <div style={styles.sizePicker}>
-                  {PATTERN_SIZES.map((size) => (
-                    <button
-                      key={size}
-                      style={{ ...styles.sizeButton, ...(patternSize === size ? styles.sizeButtonActive : {}) }}
-                      onClick={() => onPatternSizeChange(size)}
-                    >
-                      {size}
-                    </button>
-                  ))}
-                </div>
-                <button
-                  style={{ ...styles.primaryButton, ...styles.toolButton }}
-                  onClick={onGeneratePattern}
-                  disabled={!productReady || selectedPatternImage.status === 'loading'}
-                >
-                  {selectedPatternImage.status === 'loading' ? 'ГЕНЕРАЦИЯ' : `ЛЕКАЛА ${patternSize}`}
-                </button>
-                <GeneratedImagePanel
-                  title={`Чертеж ${patternSize}`}
-                  state={selectedPatternImage}
-                  aspect="wide"
-                  idleText="Лекала появятся здесь"
-                />
-              </div>
-
-              <div style={styles.toolPanel}>
-                <div style={styles.detailSectionTitle}>Похожее изделие</div>
-                <div style={styles.sliderRow}>
-                  <input
-                    type="range"
-                    min={0}
-                    max={100}
-                    value={similarity}
-                    onChange={(event) => onSimilarityChange(Number(event.target.value))}
-                    style={styles.similaritySlider}
-                  />
-                  <div style={styles.sliderValue}>{similarity}%</div>
-                </div>
-                <button
-                  style={{ ...styles.primaryButton, ...styles.toolButton }}
-                  onClick={onGenerateSimilar}
-                  disabled={!productReady || selectedSimilarImage.status === 'loading'}
-                >
-                  {selectedSimilarImage.status === 'loading' ? 'ГЕНЕРАЦИЯ' : 'СОЗДАТЬ ПОХОЖЕЕ'}
-                </button>
-                <GeneratedImagePanel
-                  title="Вариант"
-                  state={selectedSimilarImage}
-                  aspect="square"
-                  idleText="Похожее изделие появится здесь"
-                />
-              </div>
-            </div>
-          </>
-        ) : (
-          <div style={styles.emptySelection}>Выбери элемент из списка</div>
-        )}
-
-        <div style={styles.actions}>
-          <button style={styles.ghostButton} onClick={onBackToPhoto}>Назад к фото</button>
-          <button style={styles.ghostButton} onClick={onReset}>Новое фото</button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function DetailTags({ label, values }: { label: string; values: string[] }) {
-  if (!values.length) return null
-  return (
-    <div style={styles.tagBlock}>
-      <div style={styles.tagLabel}>{label}</div>
-      <div style={styles.tagList}>
-        {values.map((value) => <span key={value} style={styles.tag}>{value}</span>)}
-      </div>
-    </div>
-  )
-}
-
-function GeneratedImagePanel({
-  title,
-  state,
-  aspect,
-  idleText,
-}: {
-  title: string
-  state: ImageGenerationState
-  aspect: 'square' | 'wide'
-  idleText: string
-}) {
-  const frameStyle = aspect === 'wide' ? styles.generatedWideFrame : styles.generatedSquareFrame
-  return (
-    <div style={styles.generatedPanel}>
-      <div style={styles.detailSectionTitle}>{title}</div>
-      <div style={frameStyle}>
-        {state.status === 'loading' && (
-          <div style={styles.loadingStack}>
-            <div className="fashion-spinner" />
-            <div style={styles.pipelinePlaceholder}>Генерируем изображение</div>
-          </div>
-        )}
-        {state.status === 'success' && state.image && (
-          <img src={state.image} alt={title} style={styles.generatedImage} />
-        )}
-        {state.status === 'error' && (
-          <div style={styles.imageError}>{state.error ?? 'Генерация не удалась'}</div>
-        )}
-        {state.status === 'idle' && (
-          <div style={styles.imageEmpty}>{idleText}</div>
-        )}
-      </div>
-    </div>
-  )
-}
-
 function PipelineImage({ label, src, wide }: { label: string; src: string; wide: boolean }) {
   return (
     <div style={wide ? styles.pipelineImageWideWrap : styles.pipelineImageWrap}>
@@ -1232,12 +786,11 @@ const styles: Record<string, CSSProperties> = {
   photo: {
     width: '100%',
     maxWidth: 170,
-    aspectRatio: '9 / 16',
-    maxHeight: 'min(52vh, 360px)',
-    objectFit: 'contain',
+    height: 220,
+    objectFit: 'cover',
     borderRadius: 8,
     border: '1px solid #2a2a3a',
-    background: '#050509',
+    background: '#111',
   },
   photoLabel: {
     fontSize: 11,
@@ -1362,293 +915,6 @@ const styles: Record<string, CSSProperties> = {
     color: '#666',
     fontSize: 12,
     textAlign: 'center',
-  },
-  analysisLoading: {
-    width: '100%',
-    maxWidth: 640,
-    marginTop: 22,
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 180px), 1fr))',
-    alignItems: 'center',
-    gap: 18,
-  },
-  analysisSourceImage: {
-    width: '100%',
-    aspectRatio: '9 / 16',
-    maxHeight: 420,
-    objectFit: 'contain',
-    borderRadius: 8,
-    border: '1px solid #2a2a3a',
-    background: '#050509',
-  },
-  loadingStack: {
-    minHeight: 120,
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 12,
-  },
-  wardrobeLayout: {
-    width: '100%',
-    maxWidth: 1080,
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 280px), 1fr))',
-    gap: 18,
-    alignItems: 'start',
-    marginTop: 18,
-  },
-  outfitColumn: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 12,
-    minWidth: 0,
-  },
-  sourcePreviewImage: {
-    width: '100%',
-    aspectRatio: '9 / 16',
-    maxHeight: 320,
-    objectFit: 'contain',
-    borderRadius: 8,
-    border: '1px solid #2a2a3a',
-    background: '#050509',
-  },
-  outfitList: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 8,
-  },
-  outfitButton: {
-    minHeight: 56,
-    display: 'grid',
-    gridTemplateColumns: '30px minmax(0, 1fr)',
-    alignItems: 'center',
-    gap: 10,
-    padding: '9px 10px',
-    borderRadius: 6,
-    border: '1px solid #303044',
-    background: '#11111e',
-    color: '#e8e8f0',
-    textAlign: 'left',
-  },
-  outfitButtonActive: {
-    borderColor: '#00e5ff',
-    background: 'rgba(0,229,255,0.09)',
-  },
-  itemNumberBadge: {
-    width: 28,
-    height: 28,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 4,
-    background: '#00e5ff',
-    color: '#050509',
-    fontSize: 12,
-    fontWeight: 700,
-  },
-  itemButtonText: {
-    minWidth: 0,
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 3,
-  },
-  itemTitle: {
-    fontSize: 12,
-    fontWeight: 700,
-    lineHeight: 1.25,
-    overflowWrap: 'anywhere',
-  },
-  itemMeta: {
-    color: '#888',
-    fontSize: 10,
-    lineHeight: 1.4,
-  },
-  detailColumn: {
-    minWidth: 0,
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 14,
-  },
-  detailHeader: {
-    minHeight: 46,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 12,
-    borderBottom: '1px solid #292938',
-    paddingBottom: 10,
-  },
-  detailTitle: {
-    fontSize: 17,
-    fontWeight: 700,
-    lineHeight: 1.25,
-    overflowWrap: 'anywhere',
-  },
-  detailGrid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 260px), 1fr))',
-    gap: 14,
-    alignItems: 'start',
-  },
-  infoPanel: {
-    minWidth: 0,
-    border: '1px solid #292938',
-    borderRadius: 8,
-    padding: 14,
-    background: '#10101b',
-  },
-  detailSectionTitle: {
-    color: '#00e5ff',
-    fontSize: 11,
-    fontWeight: 700,
-    letterSpacing: 1,
-    marginBottom: 8,
-  },
-  detailText: {
-    color: '#d8d8e4',
-    fontSize: 13,
-    lineHeight: 1.6,
-    overflowWrap: 'anywhere',
-  },
-  tagBlock: {
-    marginTop: 12,
-  },
-  tagLabel: {
-    color: '#777',
-    fontSize: 10,
-    marginBottom: 6,
-  },
-  tagList: {
-    display: 'flex',
-    flexWrap: 'wrap',
-    gap: 6,
-  },
-  tag: {
-    maxWidth: '100%',
-    padding: '5px 7px',
-    borderRadius: 4,
-    border: '1px solid #303044',
-    color: '#cfcfe6',
-    background: '#151525',
-    fontSize: 10,
-    lineHeight: 1.2,
-    overflowWrap: 'anywhere',
-  },
-  generatedPanel: {
-    minWidth: 0,
-  },
-  generatedSquareFrame: {
-    width: '100%',
-    aspectRatio: '1 / 1',
-    minHeight: 220,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 8,
-    border: '1px solid #292938',
-    background: '#050509',
-    overflow: 'hidden',
-  },
-  generatedWideFrame: {
-    width: '100%',
-    aspectRatio: '16 / 9',
-    minHeight: 160,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 8,
-    border: '1px solid #292938',
-    background: '#050509',
-    overflow: 'hidden',
-  },
-  generatedImage: {
-    width: '100%',
-    height: '100%',
-    objectFit: 'contain',
-    display: 'block',
-  },
-  imageEmpty: {
-    maxWidth: 220,
-    padding: 16,
-    color: '#666',
-    fontSize: 12,
-    textAlign: 'center',
-    lineHeight: 1.5,
-  },
-  imageError: {
-    maxWidth: 240,
-    padding: 16,
-    color: '#ff6b6b',
-    fontSize: 12,
-    textAlign: 'center',
-    lineHeight: 1.45,
-    overflowWrap: 'anywhere',
-  },
-  generationGrid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 280px), 1fr))',
-    gap: 14,
-  },
-  toolPanel: {
-    minWidth: 0,
-    border: '1px solid #292938',
-    borderRadius: 8,
-    padding: 14,
-    background: '#10101b',
-  },
-  sizePicker: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
-    gap: 6,
-  },
-  sizeButton: {
-    minHeight: 34,
-    borderRadius: 4,
-    border: '1px solid #303044',
-    background: '#151525',
-    color: '#d8d8e4',
-    fontSize: 12,
-    fontWeight: 700,
-  },
-  sizeButtonActive: {
-    color: '#050509',
-    borderColor: '#00e5ff',
-    background: '#00e5ff',
-  },
-  toolButton: {
-    width: '100%',
-    marginTop: 12,
-    marginBottom: 12,
-    padding: '12px 14px',
-    fontSize: 11,
-    letterSpacing: 1,
-  },
-  sliderRow: {
-    display: 'grid',
-    gridTemplateColumns: 'minmax(0, 1fr) 46px',
-    gap: 10,
-    alignItems: 'center',
-  },
-  similaritySlider: {
-    width: '100%',
-    minWidth: 0,
-    accentColor: '#00e5ff',
-  },
-  sliderValue: {
-    color: '#d8d8e4',
-    fontSize: 12,
-    textAlign: 'right',
-  },
-  emptySelection: {
-    minHeight: 240,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    border: '1px solid #292938',
-    borderRadius: 8,
-    color: '#777',
-    fontSize: 13,
   },
   stepDots: {
     display: 'flex',
