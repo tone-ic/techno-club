@@ -42,16 +42,11 @@ const KIE_IMAGE_MODEL = process.env.KIE_IMAGE_MODEL || 'gpt-image-2-image-to-ima
 const KIE_IMAGE_PROMPT = process.env.KIE_IMAGE_PROMPT ||
   'сделай персонажа на фото без фона (на черном фоне) для последующего создания 3д модели (сохрани максимальную идентичность , не меняй внешность (одежду, черты тела и лица)). Персонаж должен быть в полный рост от головы до обуви, руки и кисти должны полностью помещаться в кадр. Если фото персонажа не видно полностью, дополни фото до полного роста и убери телефон из рук (если он имеется). Остальные аксессуары (сумка, часы, очки, украшения, головной убор) должны сохраниться с исходного фото. Руки должны быть в спокойном опущенном состоянии, слегка приподняты для лучшего последующего определения 3д модели. Лицо и взгляд персонажа должны быть направлены вперед'
 const KIE_IMAGE_ASPECT_RATIO = process.env.KIE_IMAGE_ASPECT_RATIO || '9:16'
+const KIE_OUTFIT_MODEL = process.env.KIE_OUTFIT_MODEL || 'gemini-3.1-pro'
 const KIE_CREATE_TIMEOUT_MS = Number(process.env.KIE_CREATE_TIMEOUT_MS || 45_000)
 const KIE_POLL_TIMEOUT_MS = Number(process.env.KIE_POLL_TIMEOUT_MS || 900_000)
 const KIE_DOWNLOAD_TIMEOUT_MS = Number(process.env.KIE_DOWNLOAD_TIMEOUT_MS || 90_000)
-const GEMINI_API_BASE_URL = process.env.GEMINI_API_BASE_URL || 'https://generativelanguage.googleapis.com'
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY
-  || process.env.GOOGLE_GENERATIVE_AI_API_KEY
-  || process.env.GOOGLE_API_KEY
-  || ''
-const GEMINI_OUTFIT_MODEL = process.env.GEMINI_OUTFIT_MODEL || process.env.GEMINI_MODEL || 'gemini-3.1-pro'
-const GEMINI_TIMEOUT_MS = Number(process.env.GEMINI_TIMEOUT_MS || 90_000)
+const KIE_CHAT_TIMEOUT_MS = Number(process.env.KIE_CHAT_TIMEOUT_MS || 90_000)
 const AVATAR_MODELS_BUCKET = process.env.SUPABASE_AVATAR_MODELS_BUCKET || 'avatar-models'
 const TRELLIS_COMMUNITY_SPACE_ID = 'trellis-community/TRELLIS'
 const PIXAL3D_SERVER_SPACE_ID = 'TencentARC/Pixal3D-Server'
@@ -264,10 +259,11 @@ interface KieFileUploadResponse {
   }
 }
 
-interface GeminiGenerateContentResponse {
-  candidates?: Array<{
-    content?: {
-      parts?: Array<{
+interface KieChatCompletionResponse {
+  choices?: Array<{
+    message?: {
+      content?: string | Array<{
+        type?: string
         text?: string
       }>
     }
@@ -275,6 +271,9 @@ interface GeminiGenerateContentResponse {
   error?: {
     message?: string
   }
+  code?: number
+  msg?: string
+  message?: string
 }
 
 interface AutorigResponse {
@@ -1035,18 +1034,6 @@ async function prepareSingleModelPhoto(
   return generateKieSingleModelPhoto(sourceImage, emit)
 }
 
-function makeGeminiModelPath() {
-  return GEMINI_OUTFIT_MODEL.startsWith('models/')
-    ? GEMINI_OUTFIT_MODEL
-    : `models/${GEMINI_OUTFIT_MODEL}`
-}
-
-function makeGeminiGenerateContentUrl() {
-  const url = new URL(`/v1beta/${makeGeminiModelPath()}:generateContent`, GEMINI_API_BASE_URL)
-  url.searchParams.set('key', GEMINI_API_KEY)
-  return url.toString()
-}
-
 function makeOutfitAnalysisPrompt() {
   return [
     'Analyze the uploaded photo and detect every visible clothing item and accessory worn or carried by the person.',
@@ -1060,53 +1047,86 @@ function makeOutfitAnalysisPrompt() {
   ].join('\n')
 }
 
-async function analyzeOutfitWithGemini(image: string): Promise<OutfitAnalysisResult> {
-  if (!GEMINI_API_KEY) {
-    throw new Error('GEMINI_API_KEY is not configured; add GEMINI_API_KEY or GOOGLE_GENERATIVE_AI_API_KEY to API .env')
-  }
+function makeKieChatCompletionsUrl(model: string) {
+  return new URL(`/${model.replace(/^\/+/, '')}/v1/chat/completions`, KIE_API_BASE_URL).toString()
+}
 
-  const parsedImage = parseImageDataUrl(image)
+function makeKieOutfitAnalysisBody(imageUrl: string) {
+  return {
+    messages: [{
+      role: 'user',
+      content: [
+        { type: 'text', text: makeOutfitAnalysisPrompt() },
+        { type: 'image_url', image_url: { url: imageUrl } },
+      ],
+    }],
+    stream: false,
+    reasoning_effort: 'high',
+  }
+}
+
+function extractKieChatText(body: KieChatCompletionResponse): string {
+  return (body.choices ?? [])
+    .map((choice) => choice.message?.content)
+    .flatMap((content) => {
+      if (typeof content === 'string') return [content]
+      if (Array.isArray(content)) {
+        return content
+          .map((part) => part.text)
+          .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+      }
+      return []
+    })
+    .filter((value) => value.trim().length > 0)
+    .join('\n')
+}
+
+async function postKieOutfitAnalysis(apiKey: string, imageUrl: string) {
   const response = await fetchWithTimeout(
-    makeGeminiGenerateContentUrl(),
+    makeKieChatCompletionsUrl(KIE_OUTFIT_MODEL),
     {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{
-          role: 'user',
-          parts: [
-            { text: makeOutfitAnalysisPrompt() },
-            {
-              inlineData: {
-                mimeType: parsedImage.contentType,
-                data: parsedImage.base64,
-              },
-            },
-          ],
-        }],
-        generationConfig: {
-          temperature: 0.1,
-          responseMimeType: 'application/json',
-        },
-      }),
+      headers: kieHeaders(apiKey),
+      body: JSON.stringify(makeKieOutfitAnalysisBody(imageUrl)),
     },
-    GEMINI_TIMEOUT_MS,
-    'Gemini outfit analysis',
+    KIE_CHAT_TIMEOUT_MS,
+    'KIE Gemini outfit analysis',
   )
 
-  const body = await response.json().catch(() => ({} as GeminiGenerateContentResponse)) as GeminiGenerateContentResponse
-  if (!response.ok) {
-    throw new Error(body.error?.message || `Gemini outfit analysis failed: ${response.status}`)
+  const body = await response.json().catch(() => ({} as KieChatCompletionResponse)) as KieChatCompletionResponse
+  return { response, body }
+}
+
+async function analyzeOutfitWithKieGemini(image: string): Promise<OutfitAnalysisResult> {
+  const keys = getKieApiKeys()
+  if (!keys.length) {
+    throw new Error('KIE_API_KEYS is not configured; add KIE_API_KEYS to API .env or set KIE_API_KEYS_FILE/kie.txt')
   }
 
-  const text = body.candidates
-    ?.flatMap((candidate) => candidate.content?.parts ?? [])
-    .map((part) => part.text)
-    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
-    .join('\n')
+  const uploaded = await uploadKieInputImageDataUrl(image)
+  const orderedKeys = [uploaded.apiKey, ...keys.filter((key) => key !== uploaded.apiKey)]
+  let lastError = 'KIE Gemini outfit analysis failed'
 
-  if (!text) throw new Error('Gemini outfit analysis returned no text')
-  return normalizeOutfitAnalysis(parseModelJson(text))
+  for (const apiKey of orderedKeys) {
+    const { response, body } = await postKieOutfitAnalysis(apiKey, uploaded.url)
+    if (!response.ok || body.error || (typeof body.code === 'number' && body.code >= 400)) {
+      lastError = body.error?.message
+        || body.msg
+        || body.message
+        || `KIE Gemini outfit analysis failed: ${response.status}`
+      continue
+    }
+
+    const text = extractKieChatText(body)
+    if (!text) {
+      lastError = 'KIE Gemini outfit analysis returned no text'
+      continue
+    }
+
+    return normalizeOutfitAnalysis(parseModelJson(text))
+  }
+
+  throw new Error(lastError)
 }
 
 function parseModelJson(text: string): unknown {
@@ -1136,7 +1156,7 @@ function normalizeOutfitAnalysis(value: unknown): OutfitAnalysisResult {
   if (!items.length) throw new Error('Gemini did not detect any clothing items or accessories')
 
   return {
-    model: GEMINI_OUTFIT_MODEL,
+    model: KIE_OUTFIT_MODEL,
     overview: stringFromUnknown(record.overview, 'Найдены элементы образа на фото.'),
     items,
   }
@@ -2609,7 +2629,7 @@ async function streamAvatarGenerationJob(
 
 /**
  * POST /avatar/analyze-outfit
- * Runs Gemini vision analysis and returns numbered clothing/accessory items.
+ * Runs KIE Gemini vision analysis and returns numbered clothing/accessory items.
  */
 avatarRouter.post('/analyze-outfit', async (c) => {
   const auth = await getAuthedUser(c.req.header('Authorization'))
@@ -2625,10 +2645,10 @@ avatarRouter.post('/analyze-outfit', async (c) => {
   }
 
   try {
-    return c.json({ analysis: await analyzeOutfitWithGemini(body.image) })
+    return c.json({ analysis: await analyzeOutfitWithKieGemini(body.image) })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Outfit analysis failed'
-    console.error('[Avatar Gemini] Outfit analysis error:', message)
+    console.error('[Avatar KIE Gemini] Outfit analysis error:', message)
     return c.json({ error: message }, 500)
   }
 })
