@@ -1232,11 +1232,12 @@ const styles: Record<string, CSSProperties> = {
   photo: {
     width: '100%',
     maxWidth: 170,
-    height: 220,
-    objectFit: 'cover',
+    aspectRatio: '9 / 16',
+    maxHeight: 'min(52vh, 360px)',
+    objectFit: 'contain',
     borderRadius: 8,
     border: '1px solid #2a2a3a',
-    background: '#111',
+    background: '#050509',
   },
   photoLabel: {
     fontSize: 11,
@@ -1373,8 +1374,9 @@ const styles: Record<string, CSSProperties> = {
   },
   analysisSourceImage: {
     width: '100%',
-    aspectRatio: '3 / 4',
-    objectFit: 'cover',
+    aspectRatio: '9 / 16',
+    maxHeight: 420,
+    objectFit: 'contain',
     borderRadius: 8,
     border: '1px solid #2a2a3a',
     background: '#050509',
@@ -1404,6 +1406,7 @@ const styles: Record<string, CSSProperties> = {
   },
   sourcePreviewImage: {
     width: '100%',
+    aspectRatio: '9 / 16',
     maxHeight: 320,
     objectFit: 'contain',
     borderRadius: 8,
