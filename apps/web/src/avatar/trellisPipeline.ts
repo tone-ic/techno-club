@@ -573,7 +573,10 @@ async function connectBrowserPixal3dClient(): Promise<BrowserPixal3dClient> {
   const target = await selectPixal3dTarget()
   return {
     gradio: await withTimeout(
-      Client.connect(target.reference),
+      // Use the resolved Space origin directly. Passing an owner/space id makes
+      // @gradio/client first fetch huggingface.co/api/spaces/.../host, which is
+      // an unnecessary cross-origin hop and is unreliable in mobile browsers.
+      Client.connect(target.url),
       HF_PIXAL3D_CONNECT_TIMEOUT_MS,
       `TRELLIS connect (${target.name})`,
     ),
@@ -645,10 +648,12 @@ export async function generateBrowserTrellisAvatarFromPreparedImages(
 
   let gradio: Awaited<ReturnType<typeof Client.connect>> | null = null
   const sessionId = makePixal3dSessionId()
+  let phase = 'подключение к 3D-сервису'
 
   try {
     const pixal3d = await connectBrowserPixal3dClient()
     gradio = pixal3d.gradio
+    phase = 'загрузка фото и 3D-сборка'
     const sourceImage = makeGradioImageFile(firstImage, 'doorclub-fullbody.png')
     const singleImageGeneration = await generateHuggingFaceSingleImageResult(gradio, sourceImage, sessionId, pixal3d.baseUrl)
     const generated = singleImageGeneration.generated
@@ -656,6 +661,7 @@ export async function generateBrowserTrellisAvatarFromPreparedImages(
     const temporaryModelUrl = findGlbUrl(generated.data, pixal3d.baseUrl)
     if (!temporaryModelUrl) throw new Error('Hugging Face TRELLIS response missing GLB URL')
 
+    phase = 'сохранение готовой 3D-модели'
     const mirrored = await mirrorTrellisModel(temporaryModelUrl)
     return {
       avatar: {
@@ -679,7 +685,7 @@ export async function generateBrowserTrellisAvatarFromPreparedImages(
       avatar: fallbackConfig,
       trellis: {
         status: 'failed',
-        error: message,
+        error: `${phase}: ${message}`,
       },
     }
   } finally {
