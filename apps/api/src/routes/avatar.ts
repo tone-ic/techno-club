@@ -86,6 +86,7 @@ const PIXAL3D_HF_GENERATION_SETTINGS = {
   fovUnit: 'deg',
 } as const
 const avatarGenerationJobs = new Map<string, AvatarGenerationJob>()
+const modelPhotoPreparationJobs = new Map<string, ModelPhotoPreparationJob>()
 const TRELLIS_HF_GENERATION_SETTINGS = {
   seed: 0,
   resolution: '1024',
@@ -151,6 +152,7 @@ interface GenerateAvatarBody {
 
 interface PrepareTrellisImagesBody {
   fullbodyImage: string
+  requestId?: string
 }
 
 interface GeneratePreparedAvatarBody {
@@ -232,6 +234,16 @@ interface PreparedModelPhoto {
   source: 'kie' | 'source'
   image: string
   originalImage: string | null
+}
+
+interface PreparedModelPhotoPayload {
+  prepared: PreparedModelPhoto
+  pixalImage: unknown
+}
+
+interface ModelPhotoPreparationJob {
+  promise: Promise<PreparedModelPhotoPayload>
+  cleanupTimer: ReturnType<typeof setTimeout> | null
 }
 
 type AvatarPipelineStage =
@@ -959,6 +971,61 @@ async function prepareSingleModelPhoto(
     throw new Error('KIE_API_KEYS is not configured; add KIE_API_KEYS to API .env or set KIE_API_KEYS_FILE/kie.txt')
   }
   return generateKieSingleModelPhoto(sourceImage, emit)
+}
+
+async function uploadPreparedPhotoToPixal3d(imageDataUrl: string): Promise<unknown> {
+  const form = new FormData()
+  form.append('files', makeGradioImageBlob(imageDataUrl), 'doorclub-fullbody.png')
+  const response = await fetchWithTimeout(
+    `${HF_PIXAL3D_SPACE_URL}/gradio_api/upload`,
+    { method: 'POST', body: form },
+    HF_CONNECT_TIMEOUT_MS,
+    'Pixal3D prepared photo upload',
+  )
+  if (!response.ok) {
+    throw new Error(`Pixal3D prepared photo upload failed: ${response.status} ${await response.text().catch(() => '')}`.trim())
+  }
+
+  const payload = await response.json() as unknown
+  const uploaded = Array.isArray(payload)
+    ? payload[0]
+    : payload && typeof payload === 'object' && Array.isArray((payload as { files?: unknown }).files)
+      ? (payload as { files: unknown[] }).files[0]
+      : null
+  if (typeof uploaded === 'string') return { path: uploaded }
+  if (uploaded && typeof uploaded === 'object') return uploaded
+  throw new Error('Pixal3D prepared photo upload returned no file reference')
+}
+
+function isModelPhotoRequestId(value: unknown): value is string {
+  return typeof value === 'string' && /^[a-zA-Z0-9_-]{8,120}$/.test(value)
+}
+
+function prepareSingleModelPhotoOnce(userId: string, requestId: string, sourceImage: string) {
+  const key = `${userId}:${requestId}`
+  const existing = modelPhotoPreparationJobs.get(key)
+  if (existing) return existing.promise
+
+  const job: ModelPhotoPreparationJob = {
+    promise: Promise.resolve({
+      prepared: { source: 'source', image: '', originalImage: null },
+      pixalImage: null,
+    }),
+    cleanupTimer: null,
+  }
+  modelPhotoPreparationJobs.set(key, job)
+  job.promise = (async () => {
+    const prepared = await prepareSingleModelPhoto(sourceImage)
+    return { prepared, pixalImage: await uploadPreparedPhotoToPixal3d(prepared.image) }
+  })()
+  job.promise.finally(() => {
+    job.cleanupTimer = setTimeout(() => {
+      if (modelPhotoPreparationJobs.get(key) === job) modelPhotoPreparationJobs.delete(key)
+    }, 30 * 60_000)
+  }).catch(() => {
+    // The route returns the original rejection; this only handles the cleanup chain.
+  })
+  return job.promise
 }
 
 function areImageDataUrls(images: string[]): boolean {
@@ -2344,8 +2411,8 @@ avatarRouter.post('/prepare-model-photo', async (c) => {
   }
 
   try {
-    const prepared = await prepareSingleModelPhoto(body.fullbodyImage)
-    return c.json({ prepared })
+    const requestId = isModelPhotoRequestId(body.requestId) ? body.requestId : randomUUID()
+    return c.json(await prepareSingleModelPhotoOnce(auth.user.id, requestId, body.fullbodyImage))
   } catch (error) {
     const message = error instanceof Error ? error.message : 'KIE image preparation failed'
     console.error('[Avatar KIE] Single photo prepare error:', message)

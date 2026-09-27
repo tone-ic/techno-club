@@ -329,15 +329,40 @@ export async function prepareTrellisImages(fullbodyImage: string): Promise<{ pre
 }
 
 /**
- * KIE runs on the API to keep its key private. The following Pixal3D request is
- * intentionally made by generateBrowserTrellisAvatarFromPreparedImages in the
- * user's browser, so it uses the visitor's own Hugging Face/ZeroGPU allowance.
+ * KIE and the non-GPU file upload run on the API to keep keys private and avoid
+ * Safari's unreliable cross-origin multipart upload. generate_3d itself still
+ * runs in the visitor's browser and uses that visitor's ZeroGPU allowance.
  */
-export function prepareTrellisModelPhoto(fullbodyImage: string): Promise<{ prepared: PreparedModelPhoto }> {
-  return apiJson('/avatar/prepare-model-photo', {
-    method: 'POST',
-    body: JSON.stringify({ fullbodyImage }),
-  })
+export async function prepareTrellisModelPhoto(fullbodyImage: string): Promise<{
+  prepared: PreparedModelPhoto
+  pixalImage: unknown
+}> {
+  const requestId = makePixal3dSessionId()
+  let lastError: unknown = null
+
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    try {
+      return await apiJson('/avatar/prepare-model-photo', {
+        method: 'POST',
+        body: JSON.stringify({ fullbodyImage, requestId }),
+      })
+    } catch (error) {
+      lastError = error
+      if (attempt === 2 || !isTransientApiConnectionError(error)) throw error
+      await waitFor(1_500)
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error('Не удалось подготовить фото')
+}
+
+function isTransientApiConnectionError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error)
+  return /failed to fetch|fetch failed|networkerror|network request failed|timed out/i.test(message)
+}
+
+function waitFor(ms: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms))
 }
 
 export async function generateTrellisAvatarFromPreparedImages(
@@ -632,7 +657,7 @@ export async function generateBrowserTrellisAvatar(
 }
 
 export async function generateBrowserTrellisAvatarFromPreparedImages(
-  trellisImages: string[],
+  trellisImages: unknown[],
   fallbackConfig: AvatarConfig,
   onProgress?: (progress: Pick<AvatarPipelineEvent, 'stage' | 'progress' | 'message'>) => void,
 ): Promise<TrellisAvatarResult> {
@@ -657,13 +682,12 @@ export async function generateBrowserTrellisAvatarFromPreparedImages(
     // requests to Pixal3D, so the visitor's own ZeroGPU allowance is used.
     const baseUrl = HF_PIXAL3D_SPACE_URL
     emitBrowserTrellisProgress(onProgress, 'trellis_connect', 62, 'Подключаемся к 3D-сервису с вашего устройства')
-    const sourceImage = await uploadBrowserGradioImage(firstImage, baseUrl)
 
-    phase = 'загрузка фото в 3D-сервис'
-    emitBrowserTrellisProgress(onProgress, 'trellis_session', 66, 'Фото загружено, ожидаем запуск 3D-сборки')
+    phase = 'запуск 3D-сборки'
+    emitBrowserTrellisProgress(onProgress, 'trellis_session', 66, 'Фото подготовлено, ожидаем запуск 3D-сборки')
     const generated = await callBrowserGradioEndpoint(
       'generate_3d',
-      makePixal3dGenerateData(sourceImage, sessionId),
+      makePixal3dGenerateData(firstImage, sessionId),
       HF_GENERATE_TIMEOUT_MS,
       baseUrl,
     )
@@ -720,29 +744,6 @@ function emitBrowserTrellisProgress(
   onProgress?.({ stage, progress, message })
 }
 
-async function uploadBrowserGradioImage(dataUrl: string, baseUrl: string): Promise<unknown> {
-  const form = new FormData()
-  form.append('files', makeBrowserImageFile(dataUrl, 'doorclub-fullbody.png'))
-  const response = await withTimeout(
-    fetch(`${baseUrl}/gradio_api/upload`, { method: 'POST', body: form }),
-    HF_PIXAL3D_CONNECT_TIMEOUT_MS,
-    'Pixal3D image upload',
-  )
-  if (!response.ok) {
-    throw new Error(`Pixal3D image upload failed: ${response.status} ${await response.text().catch(() => '')}`.trim())
-  }
-
-  const payload = await response.json() as unknown
-  const uploaded = Array.isArray(payload)
-    ? payload[0]
-    : payload && typeof payload === 'object' && Array.isArray((payload as { files?: unknown }).files)
-      ? (payload as { files: unknown[] }).files[0]
-      : null
-  if (typeof uploaded === 'string') return { path: uploaded }
-  if (uploaded && typeof uploaded === 'object') return uploaded
-  throw new Error('Pixal3D image upload returned no file reference')
-}
-
 async function callBrowserGradioEndpoint(
   endpoint: 'generate_3d' | 'extract_glb_api',
   data: unknown[],
@@ -797,16 +798,6 @@ function parseBrowserGradioSse(text: string, label: string): unknown {
   }
   if (result == null) throw new Error(`${label} returned no result`)
   return result
-}
-
-function makeBrowserImageFile(dataUrl: string, fileName: string): File {
-  const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/)
-  if (!match) throw new Error('Invalid image data URL')
-
-  const binary = atob(match[2])
-  const bytes = new Uint8Array(binary.length)
-  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i)
-  return new File([bytes], fileName, { type: match[1] })
 }
 
 function makePixal3dGenerateData(image: unknown, sessionId: string): unknown[] {
