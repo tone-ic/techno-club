@@ -1198,7 +1198,20 @@ function cleanExternalErrorMessage(value: string): string {
 }
 
 function formatGradioError(error: unknown): string {
-  if (error instanceof Error) return cleanExternalErrorMessage(error.message)
+  const rawMessage = error instanceof Error
+    ? error.message
+    : error && typeof error === 'object'
+      ? [
+          typeof (error as Record<string, unknown>).title === 'string' ? (error as Record<string, unknown>).title : '',
+          typeof (error as Record<string, unknown>).message === 'string' ? (error as Record<string, unknown>).message : '',
+        ].filter(Boolean).join(': ')
+      : String(error ?? '')
+
+  if (/ZeroGPU illegal duration|requested GPU duration.*maximum allowed/i.test(rawMessage)) {
+    return 'Публичный 3D-сервис сейчас не выдаёт достаточно GPU-времени для этой модели. Попробуйте позже.'
+  }
+
+  if (error instanceof Error) return cleanExternalErrorMessage(rawMessage)
   if (error && typeof error === 'object') {
     const record = error as Record<string, unknown>
     const title = typeof record.title === 'string' ? record.title : null
