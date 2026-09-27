@@ -277,6 +277,13 @@ export default function CameraPage() {
         message: 'Быстрый аватар готов',
       })
       setTrellisNotice({ tone: 'pending', message: 'Подготавливаем фото' })
+      setGenerationProcess({
+        stage: 'kie_upload',
+        sourceImage: fullbodyPhoto,
+        kieImage: null,
+        progress: 30,
+        message: 'Отправляем фото на подготовку',
+      })
 
       const { prepared } = await prepareTrellisModelPhoto(fullbodyPhoto)
       setGenerationProcess({
@@ -295,7 +302,16 @@ export default function CameraPage() {
         message: 'Подключаемся к 3D-сервису с вашего устройства',
       })
 
-      const result = await generateBrowserTrellisAvatarFromPreparedImages([prepared.image], nextGenerated.config)
+      const result = await generateBrowserTrellisAvatarFromPreparedImages([prepared.image], nextGenerated.config, (event) => {
+        setGenerationProcess({
+          stage: event.stage,
+          sourceImage: fullbodyPhoto,
+          kieImage: prepared.image,
+          progress: event.progress,
+          message: event.message,
+        })
+        setTrellisNotice({ tone: 'pending', message: event.message })
+      })
       setGenerated(result.avatar)
       setGenerationProcess({
         stage: 'done',

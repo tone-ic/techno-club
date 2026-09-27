@@ -2622,6 +2622,13 @@ function OutfitModal({
         message: 'Быстрый аватар готов',
       })
       setNotice({ tone: 'pending', message: 'Подготавливаем фото' })
+      setGenerationProcess({
+        stage: 'kie_upload',
+        sourceImage: fullbody,
+        kieImage: null,
+        progress: 30,
+        message: 'Отправляем фото на подготовку',
+      })
 
       const { prepared } = await prepareTrellisModelPhoto(fullbody)
       setGenerationProcess({
@@ -2640,7 +2647,16 @@ function OutfitModal({
         message: 'Подключаемся к 3D-сервису с вашего устройства',
       })
 
-      const result = await generateBrowserTrellisAvatarFromPreparedImages([prepared.image], fallback.config)
+      const result = await generateBrowserTrellisAvatarFromPreparedImages([prepared.image], fallback.config, (event) => {
+        setGenerationProcess({
+          stage: event.stage,
+          sourceImage: fullbody,
+          kieImage: prepared.image,
+          progress: event.progress,
+          message: event.message,
+        })
+        setNotice({ tone: 'pending', message: event.message })
+      })
 
       setGenerated(result.avatar)
       setGenerationProcess({

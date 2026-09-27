@@ -634,6 +634,7 @@ export async function generateBrowserTrellisAvatar(
 export async function generateBrowserTrellisAvatarFromPreparedImages(
   trellisImages: string[],
   fallbackConfig: AvatarConfig,
+  onProgress?: (progress: Pick<AvatarPipelineEvent, 'stage' | 'progress' | 'message'>) => void,
 ): Promise<TrellisAvatarResult> {
   const firstImage = trellisImages[0]
   if (!firstImage) {
@@ -646,22 +647,42 @@ export async function generateBrowserTrellisAvatarFromPreparedImages(
     }
   }
 
-  let gradio: Awaited<ReturnType<typeof Client.connect>> | null = null
   const sessionId = makePixal3dSessionId()
   let phase = 'подключение к 3D-сервису'
 
   try {
-    const pixal3d = await connectBrowserPixal3dClient()
-    gradio = pixal3d.gradio
-    phase = 'загрузка фото и 3D-сборка'
-    const sourceImage = makeGradioImageFile(firstImage, 'doorclub-fullbody.png')
-    const singleImageGeneration = await generateHuggingFaceSingleImageResult(gradio, sourceImage, sessionId, pixal3d.baseUrl)
-    const generated = singleImageGeneration.generated
+    // Do not use @gradio/client for the public Space here. Its initial
+    // discovery request intermittently fails in Safari/mobile browsers even
+    // though the Space API itself is available. These are direct browser
+    // requests to Pixal3D, so the visitor's own ZeroGPU allowance is used.
+    const baseUrl = HF_PIXAL3D_SPACE_URL
+    emitBrowserTrellisProgress(onProgress, 'trellis_connect', 62, 'Подключаемся к 3D-сервису с вашего устройства')
+    const sourceImage = await uploadBrowserGradioImage(firstImage, baseUrl)
 
-    const temporaryModelUrl = findGlbUrl(generated.data, pixal3d.baseUrl)
-    if (!temporaryModelUrl) throw new Error('Hugging Face TRELLIS response missing GLB URL')
+    phase = 'загрузка фото в 3D-сервис'
+    emitBrowserTrellisProgress(onProgress, 'trellis_session', 66, 'Фото загружено, ожидаем запуск 3D-сборки')
+    const generated = await callBrowserGradioEndpoint(
+      'generate_3d',
+      makePixal3dGenerateData(sourceImage, sessionId),
+      HF_GENERATE_TIMEOUT_MS,
+      baseUrl,
+    )
+
+    phase = '3D-сборка'
+    emitBrowserTrellisProgress(onProgress, 'trellis_generate', 82, 'Собираем и текстурируем 3D-модель')
+    const statePath = findPixal3dStatePath(generated)
+    if (!statePath) throw new Error('Pixal3D returned no generated model state')
+    const extracted = await callBrowserGradioEndpoint(
+      'extract_glb_api',
+      makePixal3dExtractData(statePath, sessionId),
+      HF_GENERATE_TIMEOUT_MS,
+      baseUrl,
+    )
+    const temporaryModelUrl = findGlbUrl(extracted, baseUrl)
+    if (!temporaryModelUrl) throw new Error('Pixal3D returned no GLB file')
 
     phase = 'сохранение готовой 3D-модели'
+    emitBrowserTrellisProgress(onProgress, 'trellis_upload', 92, 'Сохраняем готовую 3D-модель')
     const mirrored = await mirrorTrellisModel(temporaryModelUrl)
     return {
       avatar: {
@@ -675,7 +696,6 @@ export async function generateBrowserTrellisAvatarFromPreparedImages(
         modelUrl: mirrored.modelUrl,
         format: mirrored.format,
         triangleCount: mirrored.triangleCount,
-        error: singleImageGeneration.fallbackReason,
       },
       autorig: mirrored.autorig,
     }
@@ -688,9 +708,121 @@ export async function generateBrowserTrellisAvatarFromPreparedImages(
         error: `${phase}: ${message}`,
       },
     }
-  } finally {
-    gradio?.close()
   }
+}
+
+function emitBrowserTrellisProgress(
+  onProgress: ((progress: Pick<AvatarPipelineEvent, 'stage' | 'progress' | 'message'>) => void) | undefined,
+  stage: AvatarPipelineStage,
+  progress: number,
+  message: string,
+) {
+  onProgress?.({ stage, progress, message })
+}
+
+async function uploadBrowserGradioImage(dataUrl: string, baseUrl: string): Promise<unknown> {
+  const form = new FormData()
+  form.append('files', makeBrowserImageFile(dataUrl, 'doorclub-fullbody.png'))
+  const response = await withTimeout(
+    fetch(`${baseUrl}/gradio_api/upload`, { method: 'POST', body: form }),
+    HF_PIXAL3D_CONNECT_TIMEOUT_MS,
+    'Pixal3D image upload',
+  )
+  if (!response.ok) {
+    throw new Error(`Pixal3D image upload failed: ${response.status} ${await response.text().catch(() => '')}`.trim())
+  }
+
+  const payload = await response.json() as unknown
+  const uploaded = Array.isArray(payload)
+    ? payload[0]
+    : payload && typeof payload === 'object' && Array.isArray((payload as { files?: unknown }).files)
+      ? (payload as { files: unknown[] }).files[0]
+      : null
+  if (typeof uploaded === 'string') return { path: uploaded }
+  if (uploaded && typeof uploaded === 'object') return uploaded
+  throw new Error('Pixal3D image upload returned no file reference')
+}
+
+async function callBrowserGradioEndpoint(
+  endpoint: 'generate_3d' | 'extract_glb_api',
+  data: unknown[],
+  timeoutMs: number,
+  baseUrl: string,
+): Promise<unknown> {
+  const label = `Pixal3D ${endpoint}`
+  const callResponse = await withTimeout(
+    fetch(`${baseUrl}/gradio_api/call/${endpoint}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ data }),
+    }),
+    HF_PIXAL3D_CONNECT_TIMEOUT_MS,
+    label,
+  )
+  if (!callResponse.ok) {
+    throw new Error(`${label} request failed: ${callResponse.status} ${await callResponse.text().catch(() => '')}`.trim())
+  }
+
+  const call = await callResponse.json().catch(() => null) as { event_id?: unknown } | null
+  if (typeof call?.event_id !== 'string' || !call.event_id) throw new Error(`${label} returned no event id`)
+
+  const responseText = await withTimeout(
+    fetch(`${baseUrl}/gradio_api/call/${endpoint}/${encodeURIComponent(call.event_id)}`)
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`${label} result failed: ${response.status} ${await response.text().catch(() => '')}`.trim())
+        return response.text()
+      }),
+    timeoutMs,
+    label,
+  )
+  return parseBrowserGradioSse(responseText, label)
+}
+
+function parseBrowserGradioSse(text: string, label: string): unknown {
+  let result: unknown = null
+  for (const event of text.split(/\r?\n\r?\n/)) {
+    const type = event.match(/^event:\s*(.+)$/m)?.[1]?.trim()
+    const data = event
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith('data:'))
+      .map((line) => line.slice(5).trim())
+      .join('\n')
+    if (!data) continue
+    if (type === 'error') throw new Error(`${label} failed: ${data}`)
+    try {
+      result = JSON.parse(data)
+    } catch {
+      // Keep waiting for the final JSON payload; progress events can be plain text.
+    }
+  }
+  if (result == null) throw new Error(`${label} returned no result`)
+  return result
+}
+
+function makeBrowserImageFile(dataUrl: string, fileName: string): File {
+  const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/)
+  if (!match) throw new Error('Invalid image data URL')
+
+  const binary = atob(match[2])
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i)
+  return new File([bytes], fileName, { type: match[1] })
+}
+
+function makePixal3dGenerateData(image: unknown, sessionId: string): unknown[] {
+  const args = makePixal3dGenerateArgs(image, sessionId)
+  return [
+    args.image, args.seed, args.resolution,
+    args.ss_guidance_strength, args.ss_guidance_rescale, args.ss_sampling_steps, args.ss_rescale_t,
+    args.shape_slat_guidance_strength, args.shape_slat_guidance_rescale, args.shape_slat_sampling_steps, args.shape_slat_rescale_t,
+    args.tex_slat_guidance_strength, args.tex_slat_guidance_rescale, args.tex_slat_sampling_steps, args.tex_slat_rescale_t,
+    args.manual_fov, args.fov_unit, args.session_id,
+  ]
+}
+
+function makePixal3dExtractData(statePath: string, sessionId: string): unknown[] {
+  const args = makePixal3dExtractGlbArgs(statePath, sessionId)
+  return [args.state_path, args.decimation_target, args.texture_size, args.session_id]
 }
 
 function makeGradioImageFile(dataUrl: string, fileName: string) {
