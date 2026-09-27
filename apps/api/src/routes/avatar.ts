@@ -2326,6 +2326,34 @@ avatarRouter.post('/prepare-images', async (c) => {
 })
 
 /**
+ * POST /avatar/prepare-model-photo
+ * Prepares one full-body PNG through KIE for a browser-side 3D generation.
+ * The next Pixal3D request is deliberately made by the user's browser, not this API.
+ */
+avatarRouter.post('/prepare-model-photo', async (c) => {
+  const auth = await getAuthedUser(c.req.header('Authorization'))
+  if (!auth.user) return c.json({ error: auth.error }, 401)
+
+  const body = await c.req.json<PrepareTrellisImagesBody>().catch(() => null)
+  if (!body?.fullbodyImage) {
+    return c.json({ error: 'fullbodyImage required' }, 400)
+  }
+
+  if (!isImageDataUrl(body.fullbodyImage) || body.fullbodyImage.length > MAX_IMAGE_DATA_URL_BYTES) {
+    return c.json({ error: 'fullbodyImage must be a compressed image data URL' }, 400)
+  }
+
+  try {
+    const prepared = await prepareSingleModelPhoto(body.fullbodyImage)
+    return c.json({ prepared })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'KIE image preparation failed'
+    console.error('[Avatar KIE] Single photo prepare error:', message)
+    return c.json({ error: message }, 500)
+  }
+})
+
+/**
  * POST /avatar/generate-from-images
  * Generates a TRELLIS avatar from already prepared single/multi-image inputs.
  */

@@ -12,8 +12,9 @@ import {
   normalizeFullBodyPhoto,
 } from '@/avatar/noAiAvatarFactory'
 import {
-  generateTrellisAvatarStream,
+  generateBrowserTrellisAvatarFromPreparedImages,
   getTrellisAvatarGenerationStatus,
+  prepareTrellisModelPhoto,
   resumeTrellisAvatarStream,
   type AvatarPipelineEvent,
   type AvatarPipelineStage,
@@ -2622,17 +2623,30 @@ function OutfitModal({
       })
       setNotice({ tone: 'pending', message: 'Подготавливаем фото' })
 
-      const result = await generateTrellisAvatarStream(fullbody, fallback.config, (event) => {
-        if (event.type === 'result') return
-        setGenerationProcess((current) => processOutfitPipelineEvent(current, event, event.sourceImage ?? fullbody))
-        if (event.type !== 'error') setNotice({ tone: 'pending', message: event.message })
+      const { prepared } = await prepareTrellisModelPhoto(fullbody)
+      setGenerationProcess({
+        stage: 'kie_done',
+        sourceImage: fullbody,
+        kieImage: prepared.image,
+        progress: 58,
+        message: 'Фото готово, запускаем 3D на вашем устройстве',
       })
+      setNotice({ tone: 'pending', message: 'Собираем 3D-модель прямо с вашего устройства' })
+      setGenerationProcess({
+        stage: 'trellis_connect',
+        sourceImage: fullbody,
+        kieImage: prepared.image,
+        progress: 62,
+        message: 'Подключаемся к 3D-сервису с вашего устройства',
+      })
+
+      const result = await generateBrowserTrellisAvatarFromPreparedImages([prepared.image], fallback.config)
 
       setGenerated(result.avatar)
       setGenerationProcess({
         stage: 'done',
         sourceImage: fullbody,
-        kieImage: result.prepared?.image ?? null,
+        kieImage: prepared.image,
         progress: 100,
         message: 'Аватар готов',
       })

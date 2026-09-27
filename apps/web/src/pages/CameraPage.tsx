@@ -9,8 +9,8 @@ import {
   normalizeFullBodyPhoto,
 } from '@/avatar/noAiAvatarFactory'
 import {
-  generateTrellisAvatarStream,
-  type AvatarPipelineEvent,
+  generateBrowserTrellisAvatarFromPreparedImages,
+  prepareTrellisModelPhoto,
   type AvatarPipelineStage,
 } from '@/avatar/trellisPipeline'
 import AvatarPreview3D from '@/components/AvatarPreview3D'
@@ -278,22 +278,29 @@ export default function CameraPage() {
       })
       setTrellisNotice({ tone: 'pending', message: 'Подготавливаем фото' })
 
-      const result = await generateTrellisAvatarStream(
-        fullbodyPhoto,
-        nextGenerated.config,
-        (event) => {
-          if (event.type === 'result') return
-          setGenerationProcess((current) => processPipelineEvent(current, event, fullbodyPhoto))
-          if (event.type !== 'error') {
-            setTrellisNotice({ tone: 'pending', message: event.message })
-          }
-        },
-      )
+      const { prepared } = await prepareTrellisModelPhoto(fullbodyPhoto)
+      setGenerationProcess({
+        stage: 'kie_done',
+        sourceImage: fullbodyPhoto,
+        kieImage: prepared.image,
+        progress: 58,
+        message: 'Фото готово, запускаем 3D на вашем устройстве',
+      })
+      setTrellisNotice({ tone: 'pending', message: 'Собираем 3D-модель прямо с вашего устройства' })
+      setGenerationProcess({
+        stage: 'trellis_connect',
+        sourceImage: fullbodyPhoto,
+        kieImage: prepared.image,
+        progress: 62,
+        message: 'Подключаемся к 3D-сервису с вашего устройства',
+      })
+
+      const result = await generateBrowserTrellisAvatarFromPreparedImages([prepared.image], nextGenerated.config)
       setGenerated(result.avatar)
       setGenerationProcess({
         stage: 'done',
         sourceImage: fullbodyPhoto,
-        kieImage: result.prepared?.image ?? null,
+        kieImage: prepared.image,
         progress: 100,
         message: 'Аватар готов',
       })
@@ -557,20 +564,6 @@ function noticeToneStyle(tone: NonNullable<TrellisNotice>['tone']): CSSPropertie
   if (tone === 'success') return { color: '#75ff9b' }
   if (tone === 'warning') return { color: '#ffcc66' }
   return { color: '#888' }
-}
-
-function processPipelineEvent(
-  current: GenerationProcess,
-  event: AvatarPipelineEvent,
-  sourceImage: string,
-): GenerationProcess {
-  return {
-    stage: event.stage,
-    sourceImage,
-    kieImage: event.prepared?.image ?? current.kieImage,
-    progress: Math.max(current.progress, event.progress),
-    message: event.message,
-  }
 }
 
 function GenerationProcessView({ process }: { process: GenerationProcess }) {

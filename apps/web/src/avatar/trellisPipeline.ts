@@ -328,6 +328,18 @@ export async function prepareTrellisImages(fullbodyImage: string): Promise<{ pre
   return response.json() as Promise<{ prepared: PreparedTrellisImages }>
 }
 
+/**
+ * KIE runs on the API to keep its key private. The following Pixal3D request is
+ * intentionally made by generateBrowserTrellisAvatarFromPreparedImages in the
+ * user's browser, so it uses the visitor's own Hugging Face/ZeroGPU allowance.
+ */
+export function prepareTrellisModelPhoto(fullbodyImage: string): Promise<{ prepared: PreparedModelPhoto }> {
+  return apiJson('/avatar/prepare-model-photo', {
+    method: 'POST',
+    body: JSON.stringify({ fullbodyImage }),
+  })
+}
+
 export async function generateTrellisAvatarFromPreparedImages(
   trellisImages: string[],
   fallbackConfig: AvatarConfig,
