@@ -39,16 +39,18 @@ const HF_GENERATE_TIMEOUT_MS = 300_000
 const KIE_API_BASE_URL = process.env.KIE_API_BASE_URL || 'https://api.kie.ai'
 const KIE_FILE_UPLOAD_BASE_URL = process.env.KIE_FILE_UPLOAD_BASE_URL || 'https://kieai.redpandaai.co'
 const KIE_IMAGE_PROMPT = process.env.KIE_IMAGE_PROMPT ||
-  'сделай персонажа на фото без фона (на черном фоне) для последующего создания 3д модели (сохрани максимальную идентичность , не меняй внешность (одежду, черты тела и лица)). Персонаж должен быть в полный рост от головы до обуви, руки и кисти должны полностью помещаться в кадр. Если фото персонажа не видно полностью, дополни фото до полного роста и убери телефон из рук (если он имеется). Остальные аксессуары (сумка, часы, очки, украшения, головной убор) должны сохраниться с исходного фото. Руки должны быть в спокойном опущенном состоянии, слегка приподняты для лучшего последующего определения 3д модели. Лицо и взгляд персонажа должны быть направлены вперед'
+  'сделай персонажа на фото на прозрачном фоне для последующего создания 3д модели (сохрани максимальную идентичность , не меняй внешность (одежду, черты тела и лица)). Персонаж должен быть в полный рост от головы до обуви, руки и кисти должны полностью помещаться в кадр. Если фото персонажа не видно полностью, дополни фото до полного роста и убери телефон из рук (если он имеется). Остальные аксессуары (сумка, часы, очки, украшения, головной убор) должны сохраниться с исходного фото. Руки должны быть в спокойном опущенном состоянии, слегка приподняты для лучшего последующего определения 3д модели. Лицо и взгляд персонажа должны быть направлены вперед'
 const KIE_IMAGE_ASPECT_RATIO = process.env.KIE_IMAGE_ASPECT_RATIO || '9:16'
+const KIE_IMAGE_RESOLUTION = process.env.KIE_IMAGE_RESOLUTION || '1K'
+const KIE_IMAGE_BACKGROUND = process.env.KIE_IMAGE_BACKGROUND || 'transparent'
 const KIE_CREATE_TIMEOUT_MS = Number(process.env.KIE_CREATE_TIMEOUT_MS || 45_000)
 const KIE_POLL_TIMEOUT_MS = Number(process.env.KIE_POLL_TIMEOUT_MS || 900_000)
 const KIE_DOWNLOAD_TIMEOUT_MS = Number(process.env.KIE_DOWNLOAD_TIMEOUT_MS || 90_000)
 const AVATAR_MODELS_BUCKET = process.env.SUPABASE_AVATAR_MODELS_BUCKET || 'avatar-models'
-const TRELLIS_COMMUNITY_SPACE_ID = 'trellis-community/TRELLIS'
+const PIXAL3D_SPACE_ID = 'TencentARC/Pixal3D'
 const PIXAL3D_SERVER_SPACE_ID = 'TencentARC/Pixal3D-Server'
 const PIXAL3D_GRADIO_LIVE_HOST_SUFFIX = '.gradio.live'
-const HF_PIXAL3D_SPACE_ID = process.env.HF_TRELLIS_SPACE_ID || process.env.HF_PIXAL3D_SPACE_ID || TRELLIS_COMMUNITY_SPACE_ID
+const HF_PIXAL3D_SPACE_ID = process.env.HF_PIXAL3D_SPACE_ID || PIXAL3D_SPACE_ID
 const HF_PIXAL3D_SPACE_URL = makeHuggingFaceSpaceUrl(HF_PIXAL3D_SPACE_ID)
 const HF_PIXAL3D_SERVER_DISCOVERY_URL = process.env.HF_PIXAL3D_SERVER_DISCOVERY_URL || HF_PIXAL3D_SPACE_URL
 const HF_PIXAL3D_CONFIGURED_INSTANCE_URLS = parsePixal3dInstanceUrls(
@@ -62,6 +64,7 @@ const BLENDER_AUTORIG_REPLACE_MODEL_URL = process.env.BLENDER_AUTORIG_REPLACE_MO
   && process.env.BLENDER_AUTORIG_REPLACE_MODEL_URL !== 'false'
 const PIXAL3D_HF_GENERATION_SETTINGS = {
   seed: 0,
+  resolution: numberFromEnv('PIXAL3D_GENERATION_RESOLUTION', 1024),
   decimationTarget: PIXAL3D_DECIMATION_TARGET,
   textureSize: PIXAL3D_TEXTURE_SIZE,
   ssGuidanceStrength: 10,
@@ -726,13 +729,14 @@ function makeKieCreateTaskBody(inputUrl: string, includeOutputFormat: boolean) {
     prompt: KIE_IMAGE_PROMPT,
     input_urls: [inputUrl],
     aspect_ratio: KIE_IMAGE_ASPECT_RATIO,
-    resolution: '1K',
+    resolution: KIE_IMAGE_RESOLUTION,
+    background: KIE_IMAGE_BACKGROUND,
   }
 
   if (includeOutputFormat) input.output_format = 'png'
 
   return {
-    model: 'gpt-image-2-image-to-image',
+    model: 'gpt-image-2-5-sunburst-image-to-image',
     input,
   }
 }
@@ -1637,15 +1641,22 @@ async function callHuggingFaceEndpoint(
 function makePixal3dGenerateArgs(image: unknown, sessionId: string): Record<string, unknown> {
   return {
     image,
-    multiimages: [],
     seed: getPixal3dSeed(),
+    resolution: PIXAL3D_HF_GENERATION_SETTINGS.resolution,
     ss_guidance_strength: PIXAL3D_HF_GENERATION_SETTINGS.ssGuidanceStrength,
+    ss_guidance_rescale: PIXAL3D_HF_GENERATION_SETTINGS.ssGuidanceRescale,
     ss_sampling_steps: PIXAL3D_HF_GENERATION_SETTINGS.ssSamplingSteps,
-    slat_guidance_strength: PIXAL3D_HF_GENERATION_SETTINGS.shapeGuidance,
-    slat_sampling_steps: PIXAL3D_HF_GENERATION_SETTINGS.shapeSamplingSteps,
-    multiimage_algo: PIXAL3D_HF_GENERATION_SETTINGS.multiimageAlgo,
-    mesh_simplify: PIXAL3D_HF_GENERATION_SETTINGS.meshSimplify,
-    texture_size: PIXAL3D_HF_GENERATION_SETTINGS.textureSize,
+    ss_rescale_t: PIXAL3D_HF_GENERATION_SETTINGS.ssRescaleT,
+    shape_slat_guidance_strength: PIXAL3D_HF_GENERATION_SETTINGS.shapeGuidance,
+    shape_slat_guidance_rescale: PIXAL3D_HF_GENERATION_SETTINGS.shapeRescale,
+    shape_slat_sampling_steps: PIXAL3D_HF_GENERATION_SETTINGS.shapeSamplingSteps,
+    shape_slat_rescale_t: PIXAL3D_HF_GENERATION_SETTINGS.shapeRescaleT,
+    tex_slat_guidance_strength: PIXAL3D_HF_GENERATION_SETTINGS.texGuidance,
+    tex_slat_guidance_rescale: PIXAL3D_HF_GENERATION_SETTINGS.texRescale,
+    tex_slat_sampling_steps: PIXAL3D_HF_GENERATION_SETTINGS.texSamplingSteps,
+    tex_slat_rescale_t: PIXAL3D_HF_GENERATION_SETTINGS.texRescaleT,
+    manual_fov: PIXAL3D_HF_GENERATION_SETTINGS.manualFov,
+    fov_unit: PIXAL3D_HF_GENERATION_SETTINGS.fovUnit,
     session_id: sessionId,
   }
 }
@@ -1720,18 +1731,31 @@ async function callHuggingFaceGenerateGlb(
 ): Promise<unknown> {
   const generateArgs = filterGradioEndpointArgs(
     gradio,
-    '/generate_and_extract_glb',
+    '/generate_3d',
     makePixal3dGenerateArgs(image, sessionId),
   )
   const generated = await withTimeout(
     gradio.predict(
-      '/generate_and_extract_glb',
+      '/generate_3d',
       generateArgs,
     ),
     HF_GENERATE_TIMEOUT_MS,
-    'Hugging Face TRELLIS generate_and_extract_glb',
+    'Hugging Face Pixal3D generate_3d',
   )
-  return generated.data
+  const statePath = findPixal3dStatePath(generated.data)
+  if (!statePath) throw new Error('Hugging Face Pixal3D generate_3d returned no state path')
+
+  const extractArgs = filterGradioEndpointArgs(
+    gradio,
+    '/extract_glb_api',
+    makePixal3dExtractGlbArgs(statePath, sessionId),
+  )
+  const extracted = await withTimeout(
+    gradio.predict('/extract_glb_api', extractArgs),
+    HF_GENERATE_TIMEOUT_MS,
+    'Hugging Face Pixal3D extract_glb_api',
+  )
+  return extracted.data
 }
 
 async function callHuggingFacePreprocessImage(
@@ -1742,9 +1766,9 @@ async function callHuggingFacePreprocessImage(
 ): Promise<unknown> {
   const { handle_file } = await importGradioClient()
   const preprocessed = await withTimeout(
-    gradio.predict('/preprocess_image', { image: handle_file(makeGradioImageBlob(image)) }),
+    gradio.predict('/preprocess', { image: handle_file(makeGradioImageBlob(image)) }),
     HF_PREPROCESS_TIMEOUT_MS,
-    'Hugging Face TRELLIS preprocess_image',
+    'Hugging Face Pixal3D preprocess',
   )
   const imageForGeneration = unwrapSingleGradioOutput(preprocessed.data)
   if (!imageForGeneration) throw new Error('Hugging Face TRELLIS preprocess returned no image')

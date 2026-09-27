@@ -7,11 +7,9 @@ const API_URL = resolveRuntimeUrl(import.meta.env.VITE_API_URL || 'http://localh
   httpProtocol: 'http:',
   httpsProtocol: 'https:',
 })
-const TRELLIS_COMMUNITY_SPACE_ID = 'trellis-community/TRELLIS'
+const PIXAL3D_SPACE_ID = 'TencentARC/Pixal3D'
 const PIXAL3D_SERVER_SPACE_ID = 'TencentARC/Pixal3D-Server'
-const HF_PIXAL3D_SPACE_ID = import.meta.env.VITE_HF_TRELLIS_SPACE_ID
-  || import.meta.env.VITE_HF_PIXAL3D_SPACE_ID
-  || TRELLIS_COMMUNITY_SPACE_ID
+const HF_PIXAL3D_SPACE_ID = import.meta.env.VITE_HF_PIXAL3D_SPACE_ID || PIXAL3D_SPACE_ID
 const HF_PIXAL3D_SPACE_URL = makeHuggingFaceSpaceUrl(HF_PIXAL3D_SPACE_ID)
 const HF_PIXAL3D_SERVER_DISCOVERY_URL = import.meta.env.VITE_HF_PIXAL3D_SERVER_DISCOVERY_URL || HF_PIXAL3D_SPACE_URL
 const HF_PIXAL3D_CONFIGURED_INSTANCE_URLS = parsePixal3dInstanceUrls(
@@ -29,6 +27,7 @@ const PIXAL3D_DECIMATION_TARGET = numberFromEnv(import.meta.env.VITE_TRELLIS_DEC
 const PIXAL3D_TEXTURE_SIZE = numberFromEnv(import.meta.env.VITE_TRELLIS_TEXTURE_SIZE || import.meta.env.VITE_PIXAL3D_TEXTURE_SIZE, 2048)
 const PIXAL3D_HF_GENERATION_SETTINGS = {
   seed: 0,
+  resolution: numberFromEnv(import.meta.env.VITE_PIXAL3D_GENERATION_RESOLUTION, 1024),
   randomizeSeed: true,
   decimationTarget: PIXAL3D_DECIMATION_TARGET,
   textureSize: PIXAL3D_TEXTURE_SIZE,
@@ -743,7 +742,7 @@ async function preprocessHuggingFaceImage(
 ): Promise<unknown> {
   let preprocessed: Awaited<ReturnType<typeof gradio.predict>>
   try {
-    preprocessed = await gradio.predict('/preprocess_image', { image: sourceImage })
+    preprocessed = await gradio.predict('/preprocess', { image: sourceImage })
   } catch (error) {
     throw new Error(`TRELLIS preprocess failed: ${formatGradioError(error)}`)
   }
@@ -865,13 +864,26 @@ async function generateTrellisGlb(
 ) {
   const generateArgs = filterGradioEndpointArgs(
     gradio,
-    '/generate_and_extract_glb',
+    '/generate_3d',
     makePixal3dGenerateArgs(imageForGeneration, sessionId),
   )
-  return withTimeout(
-    gradio.predict('/generate_and_extract_glb', generateArgs),
+  const generated = await withTimeout(
+    gradio.predict('/generate_3d', generateArgs),
     HF_GENERATE_TIMEOUT_MS,
-    'Hugging Face TRELLIS generate_and_extract_glb',
+    'Hugging Face Pixal3D generate_3d',
+  )
+  const statePath = findPixal3dStatePath(generated.data)
+  if (!statePath) throw new Error('Hugging Face Pixal3D generate_3d returned no state path')
+
+  const extractArgs = filterGradioEndpointArgs(
+    gradio,
+    '/extract_glb_api',
+    makePixal3dExtractGlbArgs(statePath, sessionId),
+  )
+  return withTimeout(
+    gradio.predict('/extract_glb_api', extractArgs),
+    HF_GENERATE_TIMEOUT_MS,
+    'Hugging Face Pixal3D extract_glb_api',
   )
 }
 
@@ -919,17 +931,56 @@ function isImageLikeValue(value: unknown): boolean {
 function makePixal3dGenerateArgs(image: unknown, sessionId: string): Record<string, unknown> {
   return {
     image,
-    multiimages: [],
     seed: getPixal3dSeed(),
+    resolution: PIXAL3D_HF_GENERATION_SETTINGS.resolution,
     ss_guidance_strength: PIXAL3D_HF_GENERATION_SETTINGS.ssGuidanceStrength,
+    ss_guidance_rescale: PIXAL3D_HF_GENERATION_SETTINGS.ssGuidanceRescale,
     ss_sampling_steps: PIXAL3D_HF_GENERATION_SETTINGS.ssSamplingSteps,
-    slat_guidance_strength: PIXAL3D_HF_GENERATION_SETTINGS.shapeGuidance,
-    slat_sampling_steps: PIXAL3D_HF_GENERATION_SETTINGS.shapeSamplingSteps,
-    multiimage_algo: PIXAL3D_HF_GENERATION_SETTINGS.multiimageAlgo,
-    mesh_simplify: PIXAL3D_HF_GENERATION_SETTINGS.meshSimplify,
+    ss_rescale_t: PIXAL3D_HF_GENERATION_SETTINGS.ssRescaleT,
+    shape_slat_guidance_strength: PIXAL3D_HF_GENERATION_SETTINGS.shapeGuidance,
+    shape_slat_guidance_rescale: PIXAL3D_HF_GENERATION_SETTINGS.shapeRescale,
+    shape_slat_sampling_steps: PIXAL3D_HF_GENERATION_SETTINGS.shapeSamplingSteps,
+    shape_slat_rescale_t: PIXAL3D_HF_GENERATION_SETTINGS.shapeRescaleT,
+    tex_slat_guidance_strength: PIXAL3D_HF_GENERATION_SETTINGS.texGuidance,
+    tex_slat_guidance_rescale: PIXAL3D_HF_GENERATION_SETTINGS.texRescale,
+    tex_slat_sampling_steps: PIXAL3D_HF_GENERATION_SETTINGS.texSamplingSteps,
+    tex_slat_rescale_t: PIXAL3D_HF_GENERATION_SETTINGS.texRescaleT,
+    manual_fov: PIXAL3D_HF_GENERATION_SETTINGS.manualFov,
+    fov_unit: PIXAL3D_HF_GENERATION_SETTINGS.fovUnit,
+    session_id: sessionId,
+  }
+}
+
+function makePixal3dExtractGlbArgs(statePath: string, sessionId: string): Record<string, unknown> {
+  return {
+    state_path: statePath,
+    decimation_target: PIXAL3D_HF_GENERATION_SETTINGS.decimationTarget,
     texture_size: PIXAL3D_HF_GENERATION_SETTINGS.textureSize,
     session_id: sessionId,
   }
+}
+
+function findPixal3dStatePath(value: unknown): string | null {
+  if (!value) return null
+  if (typeof value === 'string') return /\.(npz|safetensors)(\?|$)/i.test(value) ? value : null
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findPixal3dStatePath(item)
+      if (found) return found
+    }
+    return null
+  }
+  if (typeof value !== 'object') return null
+
+  const record = value as Record<string, unknown>
+  for (const key of ['state_path', 'statePath']) {
+    if (typeof record[key] === 'string' && record[key]) return record[key] as string
+  }
+  for (const item of Object.values(record)) {
+    const found = findPixal3dStatePath(item)
+    if (found) return found
+  }
+  return null
 }
 
 function getPixal3dSeed() {
