@@ -106,6 +106,13 @@ export interface PreparedModelPhoto {
   originalImage: string | null
 }
 
+interface PreparedModelPhotoJobResponse {
+  status: 'running' | 'succeeded' | 'failed'
+  prepared?: PreparedModelPhoto
+  pixalImage?: unknown
+  error?: string
+}
+
 export type AvatarPipelineStage =
   | 'source'
   | 'fallback'
@@ -338,22 +345,51 @@ export async function prepareTrellisModelPhoto(fullbodyImage: string): Promise<{
   pixalImage: unknown
 }> {
   const requestId = makePixal3dSessionId()
-  let lastError: unknown = null
+  const started = await retryTransientApiRequest(() => apiJson<PreparedModelPhotoJobResponse>('/avatar/prepare-model-photo', {
+    method: 'POST',
+    body: JSON.stringify({ fullbodyImage, requestId }),
+  }))
+  const initialResult = unwrapPreparedModelPhotoJob(started)
+  if (initialResult) return initialResult
 
+  const deadline = Date.now() + 20 * 60_000
+  while (Date.now() < deadline) {
+    await waitFor(2_500)
+    try {
+      const status = await apiJson<PreparedModelPhotoJobResponse>(`/avatar/prepare-model-photo/${encodeURIComponent(requestId)}`, {
+        method: 'GET',
+      })
+      const result = unwrapPreparedModelPhotoJob(status)
+      if (result) return result
+    } catch (error) {
+      if (!isTransientApiConnectionError(error)) throw error
+      // The background job is still running on Railway; keep polling after a
+      // short network interruption instead of losing the prepared KIE result.
+    }
+  }
+
+  throw new Error('Подготовка фото заняла слишком много времени. Попробуй ещё раз.')
+}
+
+function unwrapPreparedModelPhotoJob(response: PreparedModelPhotoJobResponse) {
+  if (response.status === 'failed') throw new Error(response.error || 'Не удалось подготовить фото')
+  if (response.status !== 'succeeded') return null
+  if (!response.prepared || !response.pixalImage) throw new Error('Подготовленное фото не получено')
+  return { prepared: response.prepared, pixalImage: response.pixalImage }
+}
+
+async function retryTransientApiRequest<T>(request: () => Promise<T>): Promise<T> {
+  let lastError: unknown = null
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     try {
-      return await apiJson('/avatar/prepare-model-photo', {
-        method: 'POST',
-        body: JSON.stringify({ fullbodyImage, requestId }),
-      })
+      return await request()
     } catch (error) {
       lastError = error
       if (attempt === 2 || !isTransientApiConnectionError(error)) throw error
       await waitFor(1_500)
     }
   }
-
-  throw lastError instanceof Error ? lastError : new Error('Не удалось подготовить фото')
+  throw lastError instanceof Error ? lastError : new Error('Не удалось подключиться к API')
 }
 
 function isTransientApiConnectionError(error: unknown) {

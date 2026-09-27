@@ -242,6 +242,9 @@ interface PreparedModelPhotoPayload {
 }
 
 interface ModelPhotoPreparationJob {
+  status: 'running' | 'succeeded' | 'failed'
+  result: PreparedModelPhotoPayload | null
+  error: string | null
   promise: Promise<PreparedModelPhotoPayload>
   cleanupTimer: ReturnType<typeof setTimeout> | null
 }
@@ -1004,9 +1007,12 @@ function isModelPhotoRequestId(value: unknown): value is string {
 function prepareSingleModelPhotoOnce(userId: string, requestId: string, sourceImage: string) {
   const key = `${userId}:${requestId}`
   const existing = modelPhotoPreparationJobs.get(key)
-  if (existing) return existing.promise
+  if (existing) return existing
 
   const job: ModelPhotoPreparationJob = {
+    status: 'running',
+    result: null,
+    error: null,
     promise: Promise.resolve({
       prepared: { source: 'source', image: '', originalImage: null },
       pixalImage: null,
@@ -1018,14 +1024,21 @@ function prepareSingleModelPhotoOnce(userId: string, requestId: string, sourceIm
     const prepared = await prepareSingleModelPhoto(sourceImage)
     return { prepared, pixalImage: await uploadPreparedPhotoToPixal3d(prepared.image) }
   })()
-  job.promise.finally(() => {
-    job.cleanupTimer = setTimeout(() => {
-      if (modelPhotoPreparationJobs.get(key) === job) modelPhotoPreparationJobs.delete(key)
-    }, 30 * 60_000)
-  }).catch(() => {
-    // The route returns the original rejection; this only handles the cleanup chain.
-  })
-  return job.promise
+  void job.promise
+    .then((result) => {
+      job.status = 'succeeded'
+      job.result = result
+    })
+    .catch((error) => {
+      job.status = 'failed'
+      job.error = error instanceof Error ? error.message : 'KIE image preparation failed'
+    })
+    .finally(() => {
+      job.cleanupTimer = setTimeout(() => {
+        if (modelPhotoPreparationJobs.get(key) === job) modelPhotoPreparationJobs.delete(key)
+      }, 30 * 60_000)
+    })
+  return job
 }
 
 function areImageDataUrls(images: string[]): boolean {
@@ -2394,8 +2407,9 @@ avatarRouter.post('/prepare-images', async (c) => {
 
 /**
  * POST /avatar/prepare-model-photo
- * Prepares one full-body PNG through KIE for a browser-side 3D generation.
- * The next Pixal3D request is deliberately made by the user's browser, not this API.
+ * Starts preparation of one full-body PNG through KIE. The result is obtained
+ * through the short status request below, so the browser never has to keep a
+ * multi-minute HTTP request open while KIE works.
  */
 avatarRouter.post('/prepare-model-photo', async (c) => {
   const auth = await getAuthedUser(c.req.header('Authorization'))
@@ -2412,12 +2426,34 @@ avatarRouter.post('/prepare-model-photo', async (c) => {
 
   try {
     const requestId = isModelPhotoRequestId(body.requestId) ? body.requestId : randomUUID()
-    return c.json(await prepareSingleModelPhotoOnce(auth.user.id, requestId, body.fullbodyImage))
+    const job = prepareSingleModelPhotoOnce(auth.user.id, requestId, body.fullbodyImage)
+    if (job.status === 'succeeded' && job.result) return c.json({ status: job.status, ...job.result })
+    if (job.status === 'failed') return c.json({ status: job.status, error: job.error || 'KIE image preparation failed' }, 500)
+    return c.json({ status: 'running' }, 202)
   } catch (error) {
     const message = error instanceof Error ? error.message : 'KIE image preparation failed'
     console.error('[Avatar KIE] Single photo prepare error:', message)
     return c.json({ error: message }, 500)
   }
+})
+
+/**
+ * GET /avatar/prepare-model-photo/:requestId
+ * Returns the state of the KIE/photo-upload job started above.
+ */
+avatarRouter.get('/prepare-model-photo/:requestId', async (c) => {
+  const auth = await getAuthedUser(c.req.header('Authorization'))
+  if (!auth.user) return c.json({ error: auth.error }, 401)
+
+  const requestId = c.req.param('requestId')
+  if (!isModelPhotoRequestId(requestId)) return c.json({ error: 'Invalid requestId' }, 400)
+
+  const job = modelPhotoPreparationJobs.get(`${auth.user.id}:${requestId}`)
+  if (!job) return c.json({ error: 'Photo preparation job was not found; retry generation' }, 404)
+  if (job.status === 'running') return c.json({ status: job.status }, 202)
+  if (job.status === 'failed') return c.json({ status: job.status, error: job.error || 'KIE image preparation failed' }, 500)
+  if (!job.result) return c.json({ status: 'failed', error: 'Photo preparation returned no result' }, 500)
+  return c.json({ status: 'succeeded', ...job.result })
 })
 
 /**
