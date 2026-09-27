@@ -46,6 +46,7 @@ const KIE_IMAGE_BACKGROUND = process.env.KIE_IMAGE_BACKGROUND || 'transparent'
 const KIE_CREATE_TIMEOUT_MS = Number(process.env.KIE_CREATE_TIMEOUT_MS || 45_000)
 const KIE_POLL_TIMEOUT_MS = Number(process.env.KIE_POLL_TIMEOUT_MS || 900_000)
 const KIE_DOWNLOAD_TIMEOUT_MS = Number(process.env.KIE_DOWNLOAD_TIMEOUT_MS || 90_000)
+const KIE_DOWNLOAD_ATTEMPTS = Math.max(1, Number(process.env.KIE_DOWNLOAD_ATTEMPTS || 3))
 const AVATAR_MODELS_BUCKET = process.env.SUPABASE_AVATAR_MODELS_BUCKET || 'avatar-models'
 const PIXAL3D_SPACE_ID = 'TencentARC/Pixal3D'
 const PIXAL3D_SERVER_SPACE_ID = 'TencentARC/Pixal3D-Server'
@@ -736,7 +737,7 @@ function makeKieCreateTaskBody(inputUrl: string, includeOutputFormat: boolean) {
   if (includeOutputFormat) input.output_format = 'png'
 
   return {
-    model: 'gpt-image-2-5-sunburst-image-to-image',
+    model: 'gpt-image-2-5-flare-image-to-image',
     input,
   }
 }
@@ -750,7 +751,7 @@ async function postKieCreateTask(apiKey: string, inputUrl: string, includeOutput
       body: JSON.stringify(makeKieCreateTaskBody(inputUrl, includeOutputFormat)),
     },
     KIE_CREATE_TIMEOUT_MS,
-    'KIE GPT Image 2 task create',
+    'KIE GPT Image 2.5 Flare task create',
   )
 
   const body = await response.json().catch(() => ({} as KieCreateTaskResponse)) as KieCreateTaskResponse
@@ -800,7 +801,7 @@ async function pollKieImageTask(taskId: string, apiKey: string): Promise<string>
       url.toString(),
       { headers: { Authorization: `Bearer ${apiKey}` } },
       KIE_CREATE_TIMEOUT_MS,
-      'KIE GPT Image 2 task poll',
+      'KIE GPT Image 2.5 Flare task poll',
     )
     const body = await response.json().catch(() => ({} as KieTaskDetailResponse)) as KieTaskDetailResponse
     const code = body.code ?? response.status
@@ -872,23 +873,35 @@ function findFirstImageUrl(value: unknown): string | null {
 }
 
 async function downloadKiePng(url: string): Promise<Buffer> {
-  const response = await fetchWithTimeout(
-    url,
-    {},
-    KIE_DOWNLOAD_TIMEOUT_MS,
-    'KIE GPT Image 2 result download',
-  )
-  if (!response.ok) {
-    const text = await response.text().catch(() => '')
-    throw new Error(`KIE result download failed: ${response.status} ${text}`.trim())
+  let lastError: unknown = null
+
+  for (let attempt = 1; attempt <= KIE_DOWNLOAD_ATTEMPTS; attempt += 1) {
+    try {
+      const response = await fetchWithTimeout(
+        url,
+        {},
+        KIE_DOWNLOAD_TIMEOUT_MS,
+        'KIE GPT Image 2.5 Flare result download',
+      )
+      if (!response.ok) {
+        const text = await response.text().catch(() => '')
+        throw new Error(`HTTP ${response.status} ${text}`.trim())
+      }
+
+      const bytes = Buffer.from(await response.arrayBuffer())
+      if (!bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) {
+        throw new Error('result was not returned as PNG')
+      }
+
+      return bytes
+    } catch (error) {
+      lastError = error
+      if (attempt < KIE_DOWNLOAD_ATTEMPTS) await delay(attempt * 1_500)
+    }
   }
 
-  const bytes = Buffer.from(await response.arrayBuffer())
-  if (!bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) {
-    throw new Error('KIE result was not returned as PNG')
-  }
-
-  return bytes
+  const details = lastError instanceof Error ? lastError.message : String(lastError || 'unknown error')
+  throw new Error(`KIE result download failed after ${KIE_DOWNLOAD_ATTEMPTS} attempts: ${details}`)
 }
 
 async function generateKieMultiViewImages(sourceImage: string): Promise<PreparedTrellisImages> {
@@ -2286,7 +2299,7 @@ async function streamAvatarGenerationJob(
 
 /**
  * POST /avatar/prepare-images
- * Runs KIE GPT Image 2 I2I and returns the generated 4:3 sheet plus the 3 PNG views
+ * Runs KIE GPT Image 2.5 Flare I2I and returns the generated 4:3 sheet plus the 3 PNG views
  * that will be sent into TRELLIS.
  */
 avatarRouter.post('/prepare-images', async (c) => {

@@ -2855,6 +2855,10 @@ function cleanOutfitGenerationDetails(details: string): string {
 }
 
 function formatOutfitGenerationError(message: string): string {
+  if (/\bload failed\b/i.test(message)) {
+    return 'Не удалось получить подготовленное фото от сервиса генерации. Попробуй ещё раз.'
+  }
+
   if (isOutfitKiePreparationError(message)) {
     return `Не удалось подготовить фото для 3D-модели. ${cleanOutfitGenerationDetails(message)}`.trim()
   }
