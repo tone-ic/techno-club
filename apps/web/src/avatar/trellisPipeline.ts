@@ -347,7 +347,7 @@ export async function prepareTrellisModelPhoto(fullbodyImage: string): Promise<{
   const requestId = makePixal3dSessionId()
   const started = await retryTransientApiRequest(() => apiJson<PreparedModelPhotoJobResponse>('/avatar/prepare-model-photo', {
     method: 'POST',
-    body: JSON.stringify({ fullbodyImage, requestId }),
+    body: JSON.stringify({ fullbodyImage, requestId, poll: true }),
   }))
   const initialResult = unwrapPreparedModelPhotoJob(started)
   if (initialResult) return initialResult

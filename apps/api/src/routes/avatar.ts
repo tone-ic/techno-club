@@ -153,6 +153,7 @@ interface GenerateAvatarBody {
 interface PrepareTrellisImagesBody {
   fullbodyImage: string
   requestId?: string
+  poll?: boolean
 }
 
 interface GeneratePreparedAvatarBody {
@@ -2427,6 +2428,9 @@ avatarRouter.post('/prepare-model-photo', async (c) => {
   try {
     const requestId = isModelPhotoRequestId(body.requestId) ? body.requestId : randomUUID()
     const job = prepareSingleModelPhotoOnce(auth.user.id, requestId, body.fullbodyImage)
+    // Clients from before the polling update wait for the final payload. Keep
+    // that contract while current clients opt in to short polling requests.
+    if (body.poll !== true) return c.json(await job.promise)
     if (job.status === 'succeeded' && job.result) return c.json({ status: job.status, ...job.result })
     if (job.status === 'failed') return c.json({ status: job.status, error: job.error || 'KIE image preparation failed' }, 500)
     return c.json({ status: 'running' }, 202)
