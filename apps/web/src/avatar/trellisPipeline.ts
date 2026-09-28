@@ -7,6 +7,10 @@ const API_URL = resolveRuntimeUrl(import.meta.env.VITE_API_URL || 'http://localh
   httpProtocol: 'http:',
   httpsProtocol: 'https:',
 })
+// 'browser' (default): the player's browser talks to the Hugging Face Space directly.
+// 'server': generate_3d + extract_glb run on apps/api, so they can be routed through
+// SOCKS5_PROXY (browsers cannot use SOCKS5 proxies from JS).
+const AVATAR_GENERATION_MODE = String(import.meta.env.VITE_AVATAR_GENERATION_MODE || 'browser').toLowerCase()
 const PIXAL3D_SPACE_ID = 'microsoft/TRELLIS.2'
 const PIXAL3D_SERVER_SPACE_ID = 'TencentARC/Pixal3D-Server'
 const HF_PIXAL3D_SPACE_ID = import.meta.env.VITE_HF_TRELLIS_SPACE_ID || PIXAL3D_SPACE_ID
@@ -723,6 +727,10 @@ export async function generateBrowserTrellisAvatarFromPreparedImages(
     }
   }
 
+  if (AVATAR_GENERATION_MODE === 'server') {
+    return generateOnServerFromPreparedImage(firstImage, fallbackConfig, onProgress)
+  }
+
   const sessionId = makePixal3dSessionId()
   let phase = 'подключение к 3D-сервису'
 
@@ -788,6 +796,42 @@ export async function generateBrowserTrellisAvatarFromPreparedImages(
         status: 'failed',
         error: `${phase}: ${message}`,
       },
+    }
+  }
+}
+
+function preparedImageToDataUrl(image: unknown): string | null {
+  if (typeof image === 'string') return image
+  if (image && typeof image === 'object' && typeof (image as { url?: unknown }).url === 'string') {
+    return (image as { url: string }).url
+  }
+  return null
+}
+
+// Server-side generation (through the API, so SOCKS5_PROXY applies to generate_3d/extract_glb).
+async function generateOnServerFromPreparedImage(
+  image: unknown,
+  fallbackConfig: AvatarConfig,
+  onProgress?: (progress: Pick<AvatarPipelineEvent, 'stage' | 'progress' | 'message' | 'liveProgress'>) => void,
+): Promise<TrellisAvatarResult> {
+  const dataUrl = preparedImageToDataUrl(image)
+  if (!dataUrl) {
+    return {
+      avatar: fallbackConfig,
+      trellis: { status: 'failed', error: 'Подготовленное фото не удалось передать на сервер' },
+    }
+  }
+
+  emitBrowserTrellisProgress(onProgress, 'trellis_connect', 62, 'Отправляем фото на 3D-сборку (сервер)')
+  try {
+    // One long request: the API runs generate_3d + extract_glb, mirrors the GLB into
+    // Supabase and saves the avatar. Progress is coarse because the request is not streamed.
+    emitBrowserTrellisProgress(onProgress, 'trellis_generate', 78, 'Собираем и экспортируем 3D-модель')
+    return await generateTrellisAvatarFromPreparedImages([dataUrl], fallbackConfig)
+  } catch (error) {
+    return {
+      avatar: fallbackConfig,
+      trellis: { status: 'failed', error: error instanceof Error ? error.message : String(error) },
     }
   }
 }

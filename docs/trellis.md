@@ -165,3 +165,17 @@ Clip naming hints:
 - Delete worker inputs and temporary outputs within 5 minutes.
 - Downsample textures and prefer a stylized PS2 material pass before publishing the model.
 - Do not expose Hugging Face tokens or worker URLs in `apps/web`.
+
+## SOCKS5 proxy for generation / GLB extraction
+
+Browsers cannot use SOCKS5 from JS, so proxying only works for server-side generation:
+
+1. `apps/web/.env`: `VITE_AVATAR_GENERATION_MODE=server` (default `browser` = direct browser → Hugging Face).
+2. `apps/api/.env`: `SOCKS5_PROXY=socks5://user:pass@host:1080`.
+3. `pnpm --filter api proxy:check` prints the exit IP with/without the proxy and probes Hugging Face.
+
+`apps/api/src/utils/socksProxy.ts` installs a global undici dispatcher, so `@gradio/client` (`generate_3d`,
+`extract_glb_api`, `/preprocess_image`), the Space discovery and the GLB download all use the proxy.
+Only hosts from `SOCKS5_PROXY_HOSTS` (default `huggingface.co,hf.space,gradio.live`) are proxied.
+DNS is resolved by the proxy. `undici` is pinned to v6 to match the Node 20/22 built-in `fetch`
+(on Node 24 use `undici@^7`).
