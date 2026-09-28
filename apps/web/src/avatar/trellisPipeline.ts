@@ -7,9 +7,9 @@ const API_URL = resolveRuntimeUrl(import.meta.env.VITE_API_URL || 'http://localh
   httpProtocol: 'http:',
   httpsProtocol: 'https:',
 })
-const PIXAL3D_SPACE_ID = 'TencentARC/Pixal3D'
+const PIXAL3D_SPACE_ID = 'microsoft/TRELLIS.2'
 const PIXAL3D_SERVER_SPACE_ID = 'TencentARC/Pixal3D-Server'
-const HF_PIXAL3D_SPACE_ID = import.meta.env.VITE_HF_PIXAL3D_SPACE_ID || PIXAL3D_SPACE_ID
+const HF_PIXAL3D_SPACE_ID = import.meta.env.VITE_HF_TRELLIS_SPACE_ID || PIXAL3D_SPACE_ID
 const HF_PIXAL3D_SPACE_URL = makeHuggingFaceSpaceUrl(HF_PIXAL3D_SPACE_ID)
 const HF_PIXAL3D_SERVER_DISCOVERY_URL = import.meta.env.VITE_HF_PIXAL3D_SERVER_DISCOVERY_URL || HF_PIXAL3D_SPACE_URL
 const HF_PIXAL3D_CONFIGURED_INSTANCE_URLS = parsePixal3dInstanceUrls(
@@ -31,17 +31,17 @@ const PIXAL3D_HF_GENERATION_SETTINGS = {
   randomizeSeed: true,
   decimationTarget: PIXAL3D_DECIMATION_TARGET,
   textureSize: PIXAL3D_TEXTURE_SIZE,
-  ssGuidanceStrength: 10,
+  ssGuidanceStrength: 7.5,
   ssGuidanceRescale: 0.7,
-  ssSamplingSteps: 50,
+  ssSamplingSteps: 12,
   ssRescaleT: 5,
-  shapeGuidance: 9,
+  shapeGuidance: 7.5,
   shapeRescale: 0.5,
-  shapeSamplingSteps: 50,
+  shapeSamplingSteps: 12,
   shapeRescaleT: 3,
-  texGuidance: 10,
+  texGuidance: 1,
   texRescale: 0,
-  texSamplingSteps: 50,
+  texSamplingSteps: 12,
   texRescaleT: 3,
   meshSimplify: Number(import.meta.env.VITE_TRELLIS_MESH_SIMPLIFY || 0.9),
   multiimageAlgo: 'stochastic',
@@ -109,6 +109,7 @@ export interface PreparedModelPhoto {
 interface PreparedModelPhotoJobResponse {
   status: 'running' | 'succeeded' | 'failed'
   prepared?: PreparedModelPhoto
+  trellisImage?: unknown
   pixalImage?: unknown
   error?: string
 }
@@ -342,7 +343,7 @@ export async function prepareTrellisImages(fullbodyImage: string): Promise<{ pre
  */
 export async function prepareTrellisModelPhoto(fullbodyImage: string): Promise<{
   prepared: PreparedModelPhoto
-  pixalImage: unknown
+  trellisImage: unknown
 }> {
   const requestId = makePixal3dSessionId()
   const started = await retryTransientApiRequest(() => apiJson<PreparedModelPhotoJobResponse>('/avatar/prepare-model-photo', {
@@ -374,8 +375,9 @@ export async function prepareTrellisModelPhoto(fullbodyImage: string): Promise<{
 function unwrapPreparedModelPhotoJob(response: PreparedModelPhotoJobResponse) {
   if (response.status === 'failed') throw new Error(response.error || 'Не удалось подготовить фото')
   if (response.status !== 'succeeded') return null
-  if (!response.prepared || !response.pixalImage) throw new Error('Подготовленное фото не получено')
-  return { prepared: response.prepared, pixalImage: response.pixalImage }
+  const trellisImage = response.trellisImage ?? response.pixalImage
+  if (!response.prepared || !trellisImage) throw new Error('Подготовленное фото не получено')
+  return { prepared: response.prepared, trellisImage }
 }
 
 async function retryTransientApiRequest<T>(request: () => Promise<T>): Promise<T> {
@@ -708,38 +710,35 @@ export async function generateBrowserTrellisAvatarFromPreparedImages(
     }
   }
 
-  const sessionId = makePixal3dSessionId()
+  let gradio: BrowserGradioClient | null = null
   let phase = 'подключение к 3D-сервису'
 
   try {
-    // Do not use @gradio/client for the public Space here. Its initial
-    // discovery request intermittently fails in Safari/mobile browsers even
-    // though the Space API itself is available. These are direct browser
-    // requests to Pixal3D, so the visitor's own ZeroGPU allowance is used.
+    // TRELLIS.2 keeps the generated latent in a Gradio session, therefore both
+    // calls must use one browser-side client. The input is an inline PNG; no
+    // cross-origin multipart upload is needed.
     const baseUrl = HF_PIXAL3D_SPACE_URL
     emitBrowserTrellisProgress(onProgress, 'trellis_connect', 62, 'Подключаемся к 3D-сервису с вашего устройства')
+    gradio = await withTimeout(Client.connect(baseUrl), HF_PIXAL3D_CONNECT_TIMEOUT_MS, 'TRELLIS.2 connect')
+    await withTimeout(gradio.predict('/start_session', {}), HF_PIXAL3D_CONNECT_TIMEOUT_MS, 'TRELLIS.2 session start')
 
     phase = 'запуск 3D-сборки'
     emitBrowserTrellisProgress(onProgress, 'trellis_session', 66, 'Фото подготовлено, ожидаем запуск 3D-сборки')
-    const generated = await callBrowserGradioEndpoint(
-      'generate_3d',
-      makePixal3dGenerateData(firstImage, sessionId),
+    await withTimeout(
+      gradio.predict('/image_to_3d', makeTrellis2GenerateArgs(firstImage)),
       HF_GENERATE_TIMEOUT_MS,
-      baseUrl,
+      'TRELLIS.2 image_to_3d',
     )
 
-    phase = '3D-сборка'
-    emitBrowserTrellisProgress(onProgress, 'trellis_generate', 82, 'Собираем и текстурируем 3D-модель')
-    const statePath = findPixal3dStatePath(generated)
-    if (!statePath) throw new Error('Pixal3D returned no generated model state')
-    const extracted = await callBrowserGradioEndpoint(
-      'extract_glb_api',
-      makePixal3dExtractData(statePath, sessionId),
+    phase = 'экспорт 3D-модели'
+    emitBrowserTrellisProgress(onProgress, 'trellis_generate', 82, 'Собираем и экспортируем 3D-модель')
+    const extracted = await withTimeout(
+      gradio.predict('/extract_glb', makeTrellis2ExtractArgs()),
       HF_GENERATE_TIMEOUT_MS,
-      baseUrl,
+      'TRELLIS.2 extract_glb',
     )
-    const temporaryModelUrl = findGlbUrl(extracted, baseUrl)
-    if (!temporaryModelUrl) throw new Error('Pixal3D returned no GLB file')
+    const temporaryModelUrl = findGlbUrl(extracted.data, baseUrl)
+    if (!temporaryModelUrl) throw new Error('TRELLIS.2 returned no GLB file')
 
     phase = 'сохранение готовой 3D-модели'
     emitBrowserTrellisProgress(onProgress, 'trellis_upload', 92, 'Сохраняем готовую 3D-модель')
@@ -768,6 +767,8 @@ export async function generateBrowserTrellisAvatarFromPreparedImages(
         error: `${phase}: ${message}`,
       },
     }
+  } finally {
+    gradio?.close()
   }
 }
 
@@ -780,76 +781,43 @@ function emitBrowserTrellisProgress(
   onProgress?.({ stage, progress, message })
 }
 
-async function callBrowserGradioEndpoint(
-  endpoint: 'generate_3d' | 'extract_glb_api',
-  data: unknown[],
-  timeoutMs: number,
-  baseUrl: string,
-): Promise<unknown> {
-  const label = `Pixal3D ${endpoint}`
-  const callResponse = await withTimeout(
-    fetch(`${baseUrl}/gradio_api/call/${endpoint}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ data }),
-    }),
-    HF_PIXAL3D_CONNECT_TIMEOUT_MS,
-    label,
-  )
-  if (!callResponse.ok) {
-    throw new Error(`${label} request failed: ${callResponse.status} ${await callResponse.text().catch(() => '')}`.trim())
+function makeTrellis2GenerateArgs(image: unknown): Record<string, unknown> {
+  return {
+    image: normalizeTrellis2ImageInput(image),
+    seed: getPixal3dSeed(),
+    resolution: String(PIXAL3D_HF_GENERATION_SETTINGS.resolution),
+    ss_guidance_strength: PIXAL3D_HF_GENERATION_SETTINGS.ssGuidanceStrength,
+    ss_guidance_rescale: PIXAL3D_HF_GENERATION_SETTINGS.ssGuidanceRescale,
+    ss_sampling_steps: PIXAL3D_HF_GENERATION_SETTINGS.ssSamplingSteps,
+    ss_rescale_t: PIXAL3D_HF_GENERATION_SETTINGS.ssRescaleT,
+    shape_slat_guidance_strength: PIXAL3D_HF_GENERATION_SETTINGS.shapeGuidance,
+    shape_slat_guidance_rescale: PIXAL3D_HF_GENERATION_SETTINGS.shapeRescale,
+    shape_slat_sampling_steps: PIXAL3D_HF_GENERATION_SETTINGS.shapeSamplingSteps,
+    shape_slat_rescale_t: PIXAL3D_HF_GENERATION_SETTINGS.shapeRescaleT,
+    tex_slat_guidance_strength: PIXAL3D_HF_GENERATION_SETTINGS.texGuidance,
+    tex_slat_guidance_rescale: PIXAL3D_HF_GENERATION_SETTINGS.texRescale,
+    tex_slat_sampling_steps: PIXAL3D_HF_GENERATION_SETTINGS.texSamplingSteps,
+    tex_slat_rescale_t: PIXAL3D_HF_GENERATION_SETTINGS.texRescaleT,
   }
-
-  const call = await callResponse.json().catch(() => null) as { event_id?: unknown } | null
-  if (typeof call?.event_id !== 'string' || !call.event_id) throw new Error(`${label} returned no event id`)
-
-  const responseText = await withTimeout(
-    fetch(`${baseUrl}/gradio_api/call/${endpoint}/${encodeURIComponent(call.event_id)}`)
-      .then(async (response) => {
-        if (!response.ok) throw new Error(`${label} result failed: ${response.status} ${await response.text().catch(() => '')}`.trim())
-        return response.text()
-      }),
-    timeoutMs,
-    label,
-  )
-  return parseBrowserGradioSse(responseText, label)
 }
 
-function parseBrowserGradioSse(text: string, label: string): unknown {
-  let result: unknown = null
-  for (const event of text.split(/\r?\n\r?\n/)) {
-    const type = event.match(/^event:\s*(.+)$/m)?.[1]?.trim()
-    const data = event
-      .split(/\r?\n/)
-      .filter((line) => line.startsWith('data:'))
-      .map((line) => line.slice(5).trim())
-      .join('\n')
-    if (!data) continue
-    if (type === 'error') throw new Error(`${label} failed: ${data}`)
-    try {
-      result = JSON.parse(data)
-    } catch {
-      // Keep waiting for the final JSON payload; progress events can be plain text.
-    }
+function normalizeTrellis2ImageInput(image: unknown): unknown {
+  if (typeof image !== 'string' || !image.startsWith('data:image/')) return image
+  const mimeType = image.match(/^data:([^;]+);base64,/i)?.[1] || 'image/png'
+  return {
+    url: image,
+    orig_name: 'doorclub-fullbody.png',
+    mime_type: mimeType,
+    is_stream: false,
+    meta: { _type: 'gradio.FileData' },
   }
-  if (result == null) throw new Error(`${label} returned no result`)
-  return result
 }
 
-function makePixal3dGenerateData(image: unknown, sessionId: string): unknown[] {
-  const args = makePixal3dGenerateArgs(image, sessionId)
-  return [
-    args.image, args.seed, args.resolution,
-    args.ss_guidance_strength, args.ss_guidance_rescale, args.ss_sampling_steps, args.ss_rescale_t,
-    args.shape_slat_guidance_strength, args.shape_slat_guidance_rescale, args.shape_slat_sampling_steps, args.shape_slat_rescale_t,
-    args.tex_slat_guidance_strength, args.tex_slat_guidance_rescale, args.tex_slat_sampling_steps, args.tex_slat_rescale_t,
-    args.manual_fov, args.fov_unit, args.session_id,
-  ]
-}
-
-function makePixal3dExtractData(statePath: string, sessionId: string): unknown[] {
-  const args = makePixal3dExtractGlbArgs(statePath, sessionId)
-  return [args.state_path, args.decimation_target, args.texture_size, args.session_id]
+function makeTrellis2ExtractArgs(): Record<string, unknown> {
+  return {
+    decimation_target: PIXAL3D_HF_GENERATION_SETTINGS.decimationTarget,
+    texture_size: PIXAL3D_HF_GENERATION_SETTINGS.textureSize,
+  }
 }
 
 function makeGradioImageFile(dataUrl: string, fileName: string) {

@@ -48,10 +48,10 @@ const KIE_POLL_TIMEOUT_MS = Number(process.env.KIE_POLL_TIMEOUT_MS || 900_000)
 const KIE_DOWNLOAD_TIMEOUT_MS = Number(process.env.KIE_DOWNLOAD_TIMEOUT_MS || 90_000)
 const KIE_DOWNLOAD_ATTEMPTS = Math.max(1, Number(process.env.KIE_DOWNLOAD_ATTEMPTS || 3))
 const AVATAR_MODELS_BUCKET = process.env.SUPABASE_AVATAR_MODELS_BUCKET || 'avatar-models'
-const PIXAL3D_SPACE_ID = 'TencentARC/Pixal3D'
+const PIXAL3D_SPACE_ID = 'microsoft/TRELLIS.2'
 const PIXAL3D_SERVER_SPACE_ID = 'TencentARC/Pixal3D-Server'
 const PIXAL3D_GRADIO_LIVE_HOST_SUFFIX = '.gradio.live'
-const HF_PIXAL3D_SPACE_ID = process.env.HF_PIXAL3D_SPACE_ID || PIXAL3D_SPACE_ID
+const HF_PIXAL3D_SPACE_ID = process.env.HF_TRELLIS_SPACE_ID || PIXAL3D_SPACE_ID
 const HF_PIXAL3D_SPACE_URL = makeHuggingFaceSpaceUrl(HF_PIXAL3D_SPACE_ID)
 const HF_PIXAL3D_SERVER_DISCOVERY_URL = process.env.HF_PIXAL3D_SERVER_DISCOVERY_URL || HF_PIXAL3D_SPACE_URL
 const HF_PIXAL3D_CONFIGURED_INSTANCE_URLS = parsePixal3dInstanceUrls(
@@ -239,6 +239,9 @@ interface PreparedModelPhoto {
 
 interface PreparedModelPhotoPayload {
   prepared: PreparedModelPhoto
+  trellisImage: unknown
+  // Kept until older cached mobile clients have expired. Their value is now a
+  // TRELLIS.2-compatible inline image, not a Pixal3D upload reference.
   pixalImage: unknown
 }
 
@@ -977,28 +980,15 @@ async function prepareSingleModelPhoto(
   return generateKieSingleModelPhoto(sourceImage, emit)
 }
 
-async function uploadPreparedPhotoToPixal3d(imageDataUrl: string): Promise<unknown> {
-  const form = new FormData()
-  form.append('files', makeGradioImageBlob(imageDataUrl), 'doorclub-fullbody.png')
-  const response = await fetchWithTimeout(
-    `${HF_PIXAL3D_SPACE_URL}/gradio_api/upload`,
-    { method: 'POST', body: form },
-    HF_CONNECT_TIMEOUT_MS,
-    'Pixal3D prepared photo upload',
-  )
-  if (!response.ok) {
-    throw new Error(`Pixal3D prepared photo upload failed: ${response.status} ${await response.text().catch(() => '')}`.trim())
+function makeTrellis2ImageInput(imageDataUrl: string): Record<string, unknown> {
+  const mimeType = imageDataUrl.match(/^data:([^;]+);base64,/i)?.[1] || 'image/png'
+  return {
+    url: imageDataUrl,
+    orig_name: 'doorclub-fullbody.png',
+    mime_type: mimeType,
+    is_stream: false,
+    meta: { _type: 'gradio.FileData' },
   }
-
-  const payload = await response.json() as unknown
-  const uploaded = Array.isArray(payload)
-    ? payload[0]
-    : payload && typeof payload === 'object' && Array.isArray((payload as { files?: unknown }).files)
-      ? (payload as { files: unknown[] }).files[0]
-      : null
-  if (typeof uploaded === 'string') return { path: uploaded }
-  if (uploaded && typeof uploaded === 'object') return uploaded
-  throw new Error('Pixal3D prepared photo upload returned no file reference')
 }
 
 function isModelPhotoRequestId(value: unknown): value is string {
@@ -1016,6 +1006,7 @@ function prepareSingleModelPhotoOnce(userId: string, requestId: string, sourceIm
     error: null,
     promise: Promise.resolve({
       prepared: { source: 'source', image: '', originalImage: null },
+      trellisImage: null,
       pixalImage: null,
     }),
     cleanupTimer: null,
@@ -1023,7 +1014,8 @@ function prepareSingleModelPhotoOnce(userId: string, requestId: string, sourceIm
   modelPhotoPreparationJobs.set(key, job)
   job.promise = (async () => {
     const prepared = await prepareSingleModelPhoto(sourceImage)
-    return { prepared, pixalImage: await uploadPreparedPhotoToPixal3d(prepared.image) }
+    const trellisImage = makeTrellis2ImageInput(prepared.image)
+    return { prepared, trellisImage, pixalImage: trellisImage }
   })()
   void job.promise
     .then((result) => {

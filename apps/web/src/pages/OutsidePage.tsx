@@ -2630,7 +2630,7 @@ function OutfitModal({
         message: 'Отправляем фото на подготовку',
       })
 
-      const { prepared, pixalImage } = await prepareTrellisModelPhoto(fullbody)
+      const { prepared, trellisImage } = await prepareTrellisModelPhoto(fullbody)
       setGenerationProcess({
         stage: 'kie_done',
         sourceImage: fullbody,
@@ -2647,7 +2647,7 @@ function OutfitModal({
         message: 'Подключаемся к 3D-сервису с вашего устройства',
       })
 
-      const result = await generateBrowserTrellisAvatarFromPreparedImages([pixalImage], fallback.config, (event) => {
+      const result = await generateBrowserTrellisAvatarFromPreparedImages([trellisImage], fallback.config, (event) => {
         setGenerationProcess({
           stage: event.stage,
           sourceImage: fullbody,

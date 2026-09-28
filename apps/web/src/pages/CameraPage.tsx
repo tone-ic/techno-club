@@ -285,7 +285,7 @@ export default function CameraPage() {
         message: 'Отправляем фото на подготовку',
       })
 
-      const { prepared, pixalImage } = await prepareTrellisModelPhoto(fullbodyPhoto)
+      const { prepared, trellisImage } = await prepareTrellisModelPhoto(fullbodyPhoto)
       setGenerationProcess({
         stage: 'kie_done',
         sourceImage: fullbodyPhoto,
@@ -302,7 +302,7 @@ export default function CameraPage() {
         message: 'Подключаемся к 3D-сервису с вашего устройства',
       })
 
-      const result = await generateBrowserTrellisAvatarFromPreparedImages([pixalImage], nextGenerated.config, (event) => {
+      const result = await generateBrowserTrellisAvatarFromPreparedImages([trellisImage], nextGenerated.config, (event) => {
         setGenerationProcess({
           stage: event.stage,
           sourceImage: fullbodyPhoto,
