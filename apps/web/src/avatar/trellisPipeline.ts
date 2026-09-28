@@ -796,7 +796,10 @@ async function checkBrowserTrellis2Availability(baseUrl: string): Promise<void> 
       // This simple request provides a useful early failure and warms the
       // cross-origin connection before Gradio opens its queue stream.
       const probe = await withTimeout(
-        fetch(`${baseUrl}/config`, { credentials: 'include' }),
+        // TRELLIS.2 is used anonymously. Omitting credentials also avoids
+        // third-party-cookie restrictions in Safari and privacy-hardened
+        // Chromium builds before the queue session can be created.
+        fetch(`${baseUrl}/config`, { credentials: 'omit' }),
         HF_PIXAL3D_CONNECT_TIMEOUT_MS,
         'TRELLIS.2 availability check',
       )
@@ -832,7 +835,7 @@ async function runTrellis2QueueEndpoint(
     const queueUrl = `${baseUrl}/gradio_api/queue`
     const joinResponse = await fetch(`${queueUrl}/join`, {
       method: 'POST',
-      credentials: 'include',
+      credentials: 'omit',
       // Keep this request CORS-safelisted. TRELLIS.2 rejects the custom
       // x-gradio-user header that @gradio/client adds automatically.
       headers: { 'Content-Type': 'application/json' },
@@ -853,7 +856,7 @@ async function runTrellis2QueueEndpoint(
     }
 
     const streamResponse = await fetch(`${queueUrl}/data?session_hash=${encodeURIComponent(sessionId)}`, {
-      credentials: 'include',
+      credentials: 'omit',
       headers: { Accept: 'text/event-stream' },
       signal: abortController.signal,
     })
