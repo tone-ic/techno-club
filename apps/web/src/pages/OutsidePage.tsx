@@ -16,6 +16,7 @@ import {
   getTrellisAvatarGenerationStatus,
   prepareTrellisModelPhoto,
   resumeTrellisAvatarStream,
+  type AvatarLiveProgress,
   type AvatarPipelineEvent,
   type AvatarPipelineStage,
 } from '@/avatar/trellisPipeline'
@@ -2336,6 +2337,7 @@ interface OutfitGenerationProcess {
   kieImage: string | null
   progress: number
   message: string
+  liveProgress?: AvatarLiveProgress
 }
 
 function createInitialOutfitGenerationProcess(): OutfitGenerationProcess {
@@ -2654,6 +2656,7 @@ function OutfitModal({
           kieImage: prepared.image,
           progress: event.progress,
           message: event.message,
+          liveProgress: event.liveProgress,
         })
         setNotice({ tone: 'pending', message: event.message })
       })
@@ -2968,6 +2971,8 @@ function OutfitGenerationProcessView({ process, language }: { process: OutfitGen
         </div>
       )}
 
+      {process.liveProgress && <OutfitLiveTrellisProgress progress={process.liveProgress} language={language} />}
+
       <div style={outfitModalStyles.pipelineImages}>
         {process.sourceImage && <OutfitPipelineImage label={appText(language, 'исходное фото', 'source photo')} src={process.sourceImage} />}
         {process.kieImage && <OutfitPipelineImage label={appText(language, 'подготовленное фото', 'prepared photo')} src={process.kieImage} />}
@@ -2978,6 +2983,37 @@ function OutfitGenerationProcessView({ process, language }: { process: OutfitGen
       </div>
     </div>
   )
+}
+
+function OutfitLiveTrellisProgress({ progress, language }: { progress: AvatarLiveProgress; language: AppLanguage }) {
+  const steps = progress.currentStep !== null && progress.totalSteps !== null
+    ? `${progress.currentStep}/${progress.totalSteps} ${appText(language, 'шагов', 'steps')}`
+    : null
+  const timing = progress.elapsedSeconds !== null
+    ? `${formatOutfitLiveTrellisSeconds(progress.elapsedSeconds, language)}${progress.estimatedSeconds !== null ? ` / ≈ ${formatOutfitLiveTrellisSeconds(progress.estimatedSeconds, language)}` : ''}`
+    : null
+
+  return (
+    <div style={{ marginTop: 16, padding: '12px 14px', border: '1px solid #4a3050', borderRadius: 6, background: 'rgba(224,64,251,0.06)' }}>
+      <div style={{ display: 'flex', gap: 10, justifyContent: 'space-between', color: '#e8e8f0', fontSize: 12, marginBottom: 8 }}>
+        <span>{translateOutfitMessage(progress.label, language)}</span>
+        <span>{Math.round(progress.percent)}%</span>
+      </div>
+      <div style={{ height: 10, borderRadius: 4, overflow: 'hidden', background: '#1a1a28', border: '1px solid #3a3040' }}>
+        <div style={{ width: `${Math.max(0, Math.min(100, progress.percent))}%`, height: '100%', borderRadius: 4, background: '#ff6d19', transition: 'width 0.18s linear' }} />
+      </div>
+      {(steps || timing) && (
+        <div style={{ display: 'flex', gap: 12, justifyContent: 'flex-end', color: '#b18bb9', fontSize: 10, marginTop: 7 }}>
+          {steps && <span>{steps}</span>}
+          {timing && <span>{timing}</span>}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function formatOutfitLiveTrellisSeconds(seconds: number, language: AppLanguage) {
+  return `${seconds.toFixed(1)} ${appText(language, 'с', 's')}`
 }
 
 function OutfitPipelineImage({ label, src }: { label: string; src: string }) {

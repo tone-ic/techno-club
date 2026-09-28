@@ -132,11 +132,21 @@ export type AvatarPipelineStage =
   | 'done'
   | 'failed'
 
+export interface AvatarLiveProgress {
+  percent: number
+  currentStep: number | null
+  totalSteps: number | null
+  label: string
+  elapsedSeconds: number | null
+  estimatedSeconds: number | null
+}
+
 export interface AvatarPipelineEvent {
   type: 'progress' | 'prepared' | 'result' | 'error'
   stage: AvatarPipelineStage
   progress: number
   message: string
+  liveProgress?: AvatarLiveProgress
   sourceImage?: string
   prepared?: PreparedModelPhoto
   result?: StreamedTrellisAvatarResult
@@ -700,7 +710,7 @@ export async function generateBrowserTrellisAvatar(
 export async function generateBrowserTrellisAvatarFromPreparedImages(
   trellisImages: unknown[],
   fallbackConfig: AvatarConfig,
-  onProgress?: (progress: Pick<AvatarPipelineEvent, 'stage' | 'progress' | 'message'>) => void,
+  onProgress?: (progress: Pick<AvatarPipelineEvent, 'stage' | 'progress' | 'message' | 'liveProgress'>) => void,
 ): Promise<TrellisAvatarResult> {
   const firstImage = trellisImages[0]
   if (!firstImage) {
@@ -735,6 +745,7 @@ export async function generateBrowserTrellisAvatarFromPreparedImages(
       Object.values(makeTrellis2GenerateArgs(firstImage)),
       HF_GENERATE_TIMEOUT_MS,
       'TRELLIS.2 image_to_3d',
+      createTrellis2LiveProgressReporter(onProgress, 'generate'),
     )
 
     phase = 'экспорт 3D-модели'
@@ -746,6 +757,7 @@ export async function generateBrowserTrellisAvatarFromPreparedImages(
       makeTrellis2ExtractQueueArgs(),
       HF_GENERATE_TIMEOUT_MS,
       'TRELLIS.2 extract_glb',
+      createTrellis2LiveProgressReporter(onProgress, 'extract'),
     )
     const temporaryModelUrl = findGlbUrl(extracted, baseUrl)
     if (!temporaryModelUrl) throw new Error('TRELLIS.2 returned no GLB file')
@@ -781,18 +793,23 @@ export async function generateBrowserTrellisAvatarFromPreparedImages(
 }
 
 function emitBrowserTrellisProgress(
-  onProgress: ((progress: Pick<AvatarPipelineEvent, 'stage' | 'progress' | 'message'>) => void) | undefined,
+  onProgress: ((progress: Pick<AvatarPipelineEvent, 'stage' | 'progress' | 'message' | 'liveProgress'>) => void) | undefined,
   stage: AvatarPipelineStage,
   progress: number,
   message: string,
+  liveProgress?: AvatarLiveProgress,
 ) {
-  onProgress?.({ stage, progress, message })
+  onProgress?.({ stage, progress, message, liveProgress })
 }
 
 interface TrellisQueueEvent {
   msg?: unknown
   event_id?: unknown
   output?: unknown
+  progress_data?: unknown
+  rank?: unknown
+  queue_size?: unknown
+  rank_eta?: unknown
   success?: unknown
   error?: unknown
   message?: unknown
@@ -806,6 +823,7 @@ async function runTrellis2QueueEndpoint(
   data: unknown[],
   timeoutMs: number,
   label: string,
+  onQueueEvent?: (event: TrellisQueueEvent) => void,
 ): Promise<unknown[]> {
   const abortController = new AbortController()
   const timeoutId = setTimeout(() => abortController.abort(), timeoutMs)
@@ -853,7 +871,9 @@ async function runTrellis2QueueEndpoint(
       buffer = messages.pop() ?? ''
       for (const message of messages) {
         const event = parseTrellisQueueEvent(message)
-        if (!event || event.event_id !== joined.event_id || event.msg !== 'process_completed') continue
+        if (!event || event.event_id !== joined.event_id) continue
+        onQueueEvent?.(event)
+        if (event.msg !== 'process_completed') continue
 
         const output = event.output && typeof event.output === 'object'
           ? event.output as Record<string, unknown>
@@ -874,6 +894,117 @@ async function runTrellis2QueueEndpoint(
     clearTimeout(timeoutId)
     abortController.abort()
   }
+}
+
+type TrellisLivePhase = 'generate' | 'extract'
+
+function createTrellis2LiveProgressReporter(
+  onProgress: ((progress: Pick<AvatarPipelineEvent, 'stage' | 'progress' | 'message' | 'liveProgress'>) => void) | undefined,
+  phase: TrellisLivePhase,
+) {
+  const startedAt = Date.now()
+
+  return (event: TrellisQueueEvent) => {
+    if (!onProgress) return
+
+    if (event.msg === 'estimation') {
+      const rank = numberFromTrellisEvent(event.rank)
+      const queueSize = numberFromTrellisEvent(event.queue_size)
+      const eta = numberFromTrellisEvent(event.rank_eta)
+      const position = rank === null ? null : Math.max(0, Math.round(rank)) + 1
+      const queueLabel = position === null
+        ? 'Встаём в очередь 3D-сборки'
+        : `Очередь 3D-сборки: позиция ${position}${queueSize === null ? '' : ` из ${Math.max(position, Math.round(queueSize) + 1)}`}`
+      emitBrowserTrellisProgress(
+        onProgress,
+        'trellis_session',
+        66,
+        `${queueLabel}${eta && eta > 1 ? ` · ожидание ≈ ${formatTrellisSeconds(eta)}` : ''}`,
+      )
+      return
+    }
+
+    if (event.msg !== 'progress') return
+    const live = getTrellisLiveProgress(event.progress_data)
+    if (!live) return
+
+    const base = phase === 'generate' ? 66 : 82
+    const span = phase === 'generate' ? 16 : 10
+    const overallProgress = base + live.ratio * span
+    const stageLabel = phase === 'generate' ? '3D-сборка' : 'Экспорт GLB'
+    const stepLabel = formatTrellisProgressStep(live.description)
+    const stepCount = live.index !== null && live.length !== null
+      ? ` · ${Math.min(live.length, Math.max(0, live.index))}/${live.length} шагов`
+      : ''
+    const elapsed = (Date.now() - startedAt) / 1000
+    const eta = live.ratio > 0.03 ? elapsed / live.ratio : null
+    const timing = elapsed >= 1
+      ? ` · ${formatTrellisSeconds(elapsed)}${eta && eta > elapsed ? ` / ≈ ${formatTrellisSeconds(eta)}` : ''}`
+      : ''
+
+    emitBrowserTrellisProgress(
+      onProgress,
+      'trellis_generate',
+      overallProgress,
+      `${stageLabel}: ${stepLabel} — ${Math.round(live.ratio * 100)}%${stepCount}${timing}`,
+      {
+        percent: live.ratio * 100,
+        currentStep: live.index,
+        totalSteps: live.length,
+        label: `${stageLabel}: ${stepLabel}`,
+        elapsedSeconds: elapsed >= 1 ? elapsed : null,
+        estimatedSeconds: eta && eta > elapsed ? eta : null,
+      },
+    )
+  }
+}
+
+function getTrellisLiveProgress(value: unknown): {
+  ratio: number
+  index: number | null
+  length: number | null
+  description: string | null
+} | null {
+  const entries = Array.isArray(value) ? value : []
+  const entry = entries.find((item) => item && typeof item === 'object') as Record<string, unknown> | undefined
+  if (!entry) return null
+
+  const index = numberFromTrellisEvent(entry.index)
+  const length = numberFromTrellisEvent(entry.length)
+  const rawProgress = numberFromTrellisEvent(entry.progress)
+  const ratioFromProgress = rawProgress === null
+    ? null
+    : rawProgress > 1 ? rawProgress / 100 : rawProgress
+  const ratioFromSteps = index !== null && length !== null && length > 0 ? index / length : null
+  const ratio = ratioFromProgress ?? ratioFromSteps
+  if (ratio === null || !Number.isFinite(ratio)) return null
+
+  return {
+    ratio: Math.max(0, Math.min(1, ratio)),
+    index: index === null ? null : Math.round(index),
+    length: length === null ? null : Math.round(length),
+    description: typeof entry.desc === 'string' && entry.desc.trim() ? entry.desc.trim() : null,
+  }
+}
+
+function numberFromTrellisEvent(value: unknown): number | null {
+  const number = typeof value === 'number' ? value : Number(value)
+  return Number.isFinite(number) ? number : null
+}
+
+function formatTrellisProgressStep(description: string | null): string {
+  if (!description) return 'обрабатываем модель'
+  const normalized = description.toLowerCase()
+  if (normalized.includes('sparse')) return 'строим основу модели'
+  if (normalized.includes('shape')) return 'формируем геометрию'
+  if (normalized.includes('texture')) return 'создаём текстуры'
+  if (normalized.includes('decimat') || normalized.includes('simplif')) return 'оптимизируем сетку'
+  if (normalized.includes('export') || normalized.includes('glb')) return 'сохраняем GLB'
+  return description
+}
+
+function formatTrellisSeconds(value: number): string {
+  return `${Math.max(0, value).toFixed(1)} с`
 }
 
 function getTrellisQueueError(

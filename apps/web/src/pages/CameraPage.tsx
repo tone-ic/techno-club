@@ -11,6 +11,7 @@ import {
 import {
   generateBrowserTrellisAvatarFromPreparedImages,
   prepareTrellisModelPhoto,
+  type AvatarLiveProgress,
   type AvatarPipelineStage,
 } from '@/avatar/trellisPipeline'
 import AvatarPreview3D from '@/components/AvatarPreview3D'
@@ -37,6 +38,7 @@ interface GenerationProcess {
   kieImage: string | null
   progress: number
   message: string
+  liveProgress?: AvatarLiveProgress
 }
 
 async function attachStreamToVideo(video: HTMLVideoElement, stream: MediaStream): Promise<boolean> {
@@ -309,6 +311,7 @@ export default function CameraPage() {
           kieImage: prepared.image,
           progress: event.progress,
           message: event.message,
+          liveProgress: event.liveProgress,
         })
         setTrellisNotice({ tone: 'pending', message: event.message })
       })
@@ -629,6 +632,8 @@ function GenerationProcessView({ process }: { process: GenerationProcess }) {
         </div>
       )}
 
+      {process.liveProgress && <LiveTrellisProgress progress={process.liveProgress} />}
+
       <div style={styles.pipelineImages}>
         {process.sourceImage && (
           <PipelineImage label="исходное фото" src={process.sourceImage} wide={false} />
@@ -643,6 +648,37 @@ function GenerationProcessView({ process }: { process: GenerationProcess }) {
       </div>
     </div>
   )
+}
+
+function LiveTrellisProgress({ progress }: { progress: AvatarLiveProgress }) {
+  const steps = progress.currentStep !== null && progress.totalSteps !== null
+    ? `${progress.currentStep}/${progress.totalSteps} шагов`
+    : null
+  const timing = progress.elapsedSeconds !== null
+    ? `${formatLiveTrellisSeconds(progress.elapsedSeconds)}${progress.estimatedSeconds !== null ? ` / ≈ ${formatLiveTrellisSeconds(progress.estimatedSeconds)}` : ''}`
+    : null
+
+  return (
+    <div style={{ marginTop: 16, padding: '12px 14px', border: '1px solid #4a3050', borderRadius: 6, background: 'rgba(224,64,251,0.06)' }}>
+      <div style={{ display: 'flex', gap: 10, justifyContent: 'space-between', color: '#e8e8f0', fontSize: 12, marginBottom: 8 }}>
+        <span>{progress.label}</span>
+        <span>{Math.round(progress.percent)}%</span>
+      </div>
+      <div style={{ height: 10, borderRadius: 4, overflow: 'hidden', background: '#1a1a28', border: '1px solid #3a3040' }}>
+        <div style={{ width: `${Math.max(0, Math.min(100, progress.percent))}%`, height: '100%', borderRadius: 4, background: '#ff6d19', transition: 'width 0.18s linear' }} />
+      </div>
+      {(steps || timing) && (
+        <div style={{ display: 'flex', gap: 12, justifyContent: 'flex-end', color: '#b18bb9', fontSize: 10, marginTop: 7 }}>
+          {steps && <span>{steps}</span>}
+          {timing && <span>{timing}</span>}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function formatLiveTrellisSeconds(seconds: number) {
+  return `${seconds.toFixed(1)} с`
 }
 
 function PipelineImage({ label, src, wide }: { label: string; src: string; wide: boolean }) {
