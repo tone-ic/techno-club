@@ -724,7 +724,6 @@ export async function generateBrowserTrellisAvatarFromPreparedImages(
     // non-CORS-safe header.
     const baseUrl = HF_PIXAL3D_SPACE_URL
     emitBrowserTrellisProgress(onProgress, 'trellis_connect', 62, 'Подключаемся к 3D-сервису с вашего устройства')
-    await checkBrowserTrellis2Availability(baseUrl)
 
     phase = 'открытие сессии 3D-сервиса'
     await runTrellis2QueueEndpoint(baseUrl, sessionId, 2, [], HF_PIXAL3D_CONNECT_TIMEOUT_MS, 'TRELLIS.2 session start')
@@ -790,30 +789,6 @@ function emitBrowserTrellisProgress(
   message: string,
 ) {
   onProgress?.({ stage, progress, message })
-}
-
-async function checkBrowserTrellis2Availability(baseUrl: string): Promise<void> {
-  let lastError: unknown = null
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
-    try {
-      // This simple request provides a useful early failure and warms the
-      // cross-origin connection before Gradio opens its queue stream.
-      const probe = await withTimeout(
-        // TRELLIS.2 is used anonymously. Omitting credentials also avoids
-        // third-party-cookie restrictions in Safari and privacy-hardened
-        // Chromium builds before the queue session can be created.
-        fetch(`${baseUrl}/config`, { credentials: 'omit' }),
-        HF_PIXAL3D_CONNECT_TIMEOUT_MS,
-        'TRELLIS.2 availability check',
-      )
-      if (!probe.ok) throw new Error(`TRELLIS.2 availability check failed: ${probe.status}`)
-      return
-    } catch (error) {
-      lastError = error
-      if (attempt < 3) await waitFor(attempt * 1_500)
-    }
-  }
-  throw lastError instanceof Error ? lastError : new Error('Не удалось подключиться к TRELLIS.2')
 }
 
 interface TrellisQueueEvent {
