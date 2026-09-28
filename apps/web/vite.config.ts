@@ -67,6 +67,12 @@ export default defineConfig({
       // check for a new worker on every launch instead of waiting for the
       // browser's (up to 24-hour) service-worker update interval.
       injectRegister: false,
+      workbox: {
+        // Take over the opened tab as soon as a newer worker is installed.
+        // src/main.tsx then reloads it once to run the matching JS bundle.
+        clientsClaim: true,
+        skipWaiting: true,
+      },
       includeAssets: ['favicon.ico', 'apple-touch-icon.png'],
       manifest: {
         name: 'DOOR//CLUB',
