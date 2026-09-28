@@ -710,16 +710,18 @@ export async function generateBrowserTrellisAvatarFromPreparedImages(
     }
   }
 
+  const sessionId = makePixal3dSessionId()
   let gradio: BrowserGradioClient | null = null
   let phase = 'подключение к 3D-сервису'
 
   try {
-    // TRELLIS.2 keeps the generated latent in a Gradio session, therefore both
-    // calls must use one browser-side client. The input is an inline PNG; no
-    // cross-origin multipart upload is needed.
+    // TRELLIS.2 keeps generated state in Gradio's queue session. The official
+    // client is required here: a plain /call request cannot preserve that
+    // session for the later GLB export.
     const baseUrl = HF_PIXAL3D_SPACE_URL
     emitBrowserTrellisProgress(onProgress, 'trellis_connect', 62, 'Подключаемся к 3D-сервису с вашего устройства')
-    gradio = await withTimeout(Client.connect(baseUrl), HF_PIXAL3D_CONNECT_TIMEOUT_MS, 'TRELLIS.2 connect')
+    gradio = await connectBrowserTrellis2Client(baseUrl, sessionId)
+    phase = 'открытие сессии 3D-сервиса'
     await withTimeout(gradio.predict('/start_session', {}), HF_PIXAL3D_CONNECT_TIMEOUT_MS, 'TRELLIS.2 session start')
 
     phase = 'запуск 3D-сборки'
@@ -779,6 +781,34 @@ function emitBrowserTrellisProgress(
   message: string,
 ) {
   onProgress?.({ stage, progress, message })
+}
+
+async function connectBrowserTrellis2Client(
+  baseUrl: string,
+  sessionId: string,
+): Promise<BrowserGradioClient> {
+  let lastError: unknown = null
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      // This simple request provides a useful early failure and warms the
+      // cross-origin connection before Gradio opens its queue stream.
+      const probe = await withTimeout(
+        fetch(`${baseUrl}/config`, { credentials: 'include' }),
+        HF_PIXAL3D_CONNECT_TIMEOUT_MS,
+        'TRELLIS.2 availability check',
+      )
+      if (!probe.ok) throw new Error(`TRELLIS.2 availability check failed: ${probe.status}`)
+      return await withTimeout(
+        Client.connect(baseUrl, { session_hash: sessionId }),
+        HF_PIXAL3D_CONNECT_TIMEOUT_MS,
+        'TRELLIS.2 connect',
+      )
+    } catch (error) {
+      lastError = error
+      if (attempt < 3) await waitFor(attempt * 1_500)
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error('Не удалось подключиться к TRELLIS.2')
 }
 
 function makeTrellis2GenerateArgs(image: unknown): Record<string, unknown> {
