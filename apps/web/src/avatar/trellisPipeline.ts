@@ -796,6 +796,8 @@ interface TrellisQueueEvent {
   event_id?: unknown
   output?: unknown
   success?: unknown
+  error?: unknown
+  title?: unknown
 }
 
 async function runTrellis2QueueEndpoint(
@@ -859,9 +861,9 @@ async function runTrellis2QueueEndpoint(
         const output = event.output && typeof event.output === 'object'
           ? event.output as Record<string, unknown>
           : null
-        const error = output?.error
+        const error = getTrellisQueueError(event, output)
         if (event.success === false || error) {
-          throw new Error(typeof error === 'string' ? error : `${label} failed`)
+          throw new Error(error ?? `${label} failed`)
         }
         return Array.isArray(output?.data) ? output.data : []
       }
@@ -877,6 +879,23 @@ async function runTrellis2QueueEndpoint(
     clearTimeout(timeoutId)
     abortController.abort()
   }
+}
+
+function getTrellisQueueError(
+  event: TrellisQueueEvent,
+  output: Record<string, unknown> | null,
+): string | null {
+  for (const value of [output?.error, output?.message, event.error, event.title]) {
+    if (typeof value === 'string' && value.trim()) return value.trim()
+    if (value && typeof value === 'object') {
+      try {
+        return JSON.stringify(value)
+      } catch {
+        return 'TRELLIS.2 queue returned an unreadable error'
+      }
+    }
+  }
+  return null
 }
 
 function parseTrellisQueueEvent(message: string): TrellisQueueEvent | null {
