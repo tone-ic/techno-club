@@ -63,6 +63,10 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
+      // Registration is handled in src/main.tsx so the app can explicitly
+      // check for a new worker on every launch instead of waiting for the
+      // browser's (up to 24-hour) service-worker update interval.
+      injectRegister: false,
       includeAssets: ['favicon.ico', 'apple-touch-icon.png'],
       manifest: {
         name: 'DOOR//CLUB',
