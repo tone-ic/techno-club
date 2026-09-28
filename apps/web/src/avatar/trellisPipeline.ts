@@ -437,7 +437,10 @@ export async function generateTrellisAvatarFromPreparedImages(
 function makeHuggingFaceSpaceUrl(spaceIdOrUrl: string): string {
   const value = spaceIdOrUrl.trim().replace(/\/+$/, '')
   if (/^https?:\/\//i.test(value)) return value
-  return `https://${value.toLowerCase().replace('/', '-')}.hf.space`
+  // Hugging Face turns both the owner/space separator and dots in a Space
+  // name into hyphens for its *.hf.space hostname. For example,
+  // microsoft/TRELLIS.2 is microsoft-trellis-2.hf.space.
+  return `https://${value.toLowerCase().replace(/[/.]/g, '-')}.hf.space`
 }
 
 function parsePixal3dInstanceUrls(value: string): string[] {

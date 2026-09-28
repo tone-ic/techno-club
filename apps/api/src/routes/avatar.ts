@@ -493,7 +493,8 @@ function isAvatarConfig(value: unknown): value is AvatarConfig {
 function makeHuggingFaceSpaceUrl(spaceIdOrUrl: string): string {
   const value = spaceIdOrUrl.trim().replace(/\/+$/, '')
   if (/^https?:\/\//i.test(value)) return value
-  return `https://${value.toLowerCase().replace('/', '-')}.hf.space`
+  // Space ids with dots use hyphens in their public *.hf.space hostname.
+  return `https://${value.toLowerCase().replace(/[/.]/g, '-')}.hf.space`
 }
 
 function parsePixal3dInstanceUrls(value: string): string[] {
