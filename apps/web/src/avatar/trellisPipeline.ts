@@ -714,38 +714,36 @@ export async function generateBrowserTrellisAvatarFromPreparedImages(
   }
 
   const sessionId = makePixal3dSessionId()
-  let gradio: BrowserGradioClient | null = null
   let phase = 'подключение к 3D-сервису'
 
   try {
-    // The normal Gradio client preserves the hidden gr.State value returned by
-    // image_to_3d for extract_glb. Its public predict() method adds an
-    // x-gradio-user header, however, which TRELLIS.2 rejects during CORS
-    // preflight. The submit helper below uses the same stateful client with an
-    // explicit empty header object instead.
+    // TRELLIS.2's public browser API rejects @gradio/client's default
+    // x-gradio-user header in CORS preflight. Use its queue protocol directly;
+    // the hidden gr.State remains stored server-side under this session hash.
     const baseUrl = HF_PIXAL3D_SPACE_URL
     emitBrowserTrellisProgress(onProgress, 'trellis_connect', 62, 'Подключаемся к 3D-сервису с вашего устройства')
-    gradio = await connectBrowserTrellis2Client(baseUrl, sessionId)
 
     phase = 'открытие сессии 3D-сервиса'
-    await predictTrellis2WithoutCorsHeader(gradio, '/start_session', {}, HF_PIXAL3D_CONNECT_TIMEOUT_MS, 'TRELLIS.2 session start')
+    await runTrellis2QueueEndpoint(baseUrl, sessionId, 2, [], HF_PIXAL3D_CONNECT_TIMEOUT_MS, 'TRELLIS.2 session start')
 
     phase = 'запуск 3D-сборки'
     emitBrowserTrellisProgress(onProgress, 'trellis_session', 66, 'Фото подготовлено, ожидаем запуск 3D-сборки')
-    await predictTrellis2WithoutCorsHeader(
-      gradio,
-      '/image_to_3d',
-      makeTrellis2GenerateArgs(firstImage),
+    await runTrellis2QueueEndpoint(
+      baseUrl,
+      sessionId,
+      7,
+      Object.values(makeTrellis2GenerateArgs(firstImage)),
       HF_GENERATE_TIMEOUT_MS,
       'TRELLIS.2 image_to_3d',
     )
 
     phase = 'экспорт 3D-модели'
     emitBrowserTrellisProgress(onProgress, 'trellis_generate', 82, 'Собираем и экспортируем 3D-модель')
-    const extracted = await predictTrellis2WithoutCorsHeader(
-      gradio,
-      '/extract_glb',
-      makeTrellis2ExtractArgs(),
+    const extracted = await runTrellis2QueueEndpoint(
+      baseUrl,
+      sessionId,
+      9,
+      makeTrellis2ExtractQueueArgs(),
       HF_GENERATE_TIMEOUT_MS,
       'TRELLIS.2 extract_glb',
     )
@@ -779,8 +777,6 @@ export async function generateBrowserTrellisAvatarFromPreparedImages(
         error: `${phase}: ${message}`,
       },
     }
-  } finally {
-    gradio?.close()
   }
 }
 
@@ -793,80 +789,123 @@ function emitBrowserTrellisProgress(
   onProgress?.({ stage, progress, message })
 }
 
-async function connectBrowserTrellis2Client(
-  baseUrl: string,
-  sessionId: string,
-): Promise<BrowserGradioClient> {
-  let lastError: unknown = null
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
-    try {
-      return await withTimeout(
-        Client.connect(baseUrl, { session_hash: sessionId }),
-        HF_PIXAL3D_CONNECT_TIMEOUT_MS,
-        'TRELLIS.2 connect',
-      )
-    } catch (error) {
-      lastError = error
-      if (attempt < 3) await waitFor(attempt * 1_500)
-    }
-  }
-  throw lastError instanceof Error ? lastError : new Error('Не удалось подключиться к TRELLIS.2')
-}
-
-interface TrellisGradioEvent {
-  type?: unknown
-  data?: unknown
-  stage?: unknown
+interface TrellisQueueEvent {
+  msg?: unknown
+  event_id?: unknown
+  output?: unknown
   success?: unknown
+  error?: unknown
   message?: unknown
   title?: unknown
 }
 
-type BrowserTrellisSubmit = (
-  endpoint: string,
-  data: Record<string, unknown>,
-  eventData?: unknown,
-  triggerId?: number | null,
-  allEvents?: boolean,
-  additionalHeaders?: Record<string, string>,
-) => AsyncIterable<TrellisGradioEvent>
-
-async function predictTrellis2WithoutCorsHeader(
-  gradio: BrowserGradioClient,
-  endpoint: string,
-  data: Record<string, unknown>,
+async function runTrellis2QueueEndpoint(
+  baseUrl: string,
+  sessionId: string,
+  fnIndex: number,
+  data: unknown[],
   timeoutMs: number,
   label: string,
-): Promise<unknown> {
-  const submit = gradio.submit as unknown as BrowserTrellisSubmit
-  // The seventh runtime parameter is supported by @gradio/client's submit
-  // implementation but is not exposed by its public TypeScript declaration.
-  // An empty object prevents its default x-gradio-user header from being sent.
-  const events = submit(endpoint, data, undefined, undefined, false, {})
+): Promise<unknown[]> {
+  const abortController = new AbortController()
+  const timeoutId = setTimeout(() => abortController.abort(), timeoutMs)
 
-  return withTimeout((async () => {
-    for await (const event of events) {
-      if (event.type === 'data') return event.data
-      if (event.type === 'status' && event.stage === 'error') {
-        throw new Error(getTrellisGradioEventError(event) ?? `${label} failed`)
+  try {
+    const queueUrl = `${baseUrl}/gradio_api/queue`
+    const joinResponse = await fetch(`${queueUrl}/join`, {
+      method: 'POST',
+      credentials: 'omit',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        data,
+        event_data: null,
+        fn_index: fnIndex,
+        trigger_id: null,
+        session_hash: sessionId,
+      }),
+      signal: abortController.signal,
+    })
+    if (!joinResponse.ok) throw new Error(`${label} queue join failed: ${joinResponse.status}`)
+
+    const joined = await joinResponse.json() as { event_id?: unknown }
+    if (typeof joined.event_id !== 'string' || !joined.event_id) {
+      throw new Error(`${label} queue returned no event id`)
+    }
+
+    const streamResponse = await fetch(`${queueUrl}/data?session_hash=${encodeURIComponent(sessionId)}`, {
+      credentials: 'omit',
+      headers: { Accept: 'text/event-stream' },
+      signal: abortController.signal,
+    })
+    if (!streamResponse.ok) throw new Error(`${label} queue stream failed: ${streamResponse.status}`)
+    if (!streamResponse.body) throw new Error(`${label} queue stream has no body`)
+
+    const reader = streamResponse.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    while (true) {
+      const { value, done } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+
+      const messages = buffer.split(/\r?\n\r?\n/)
+      buffer = messages.pop() ?? ''
+      for (const message of messages) {
+        const event = parseTrellisQueueEvent(message)
+        if (!event || event.event_id !== joined.event_id || event.msg !== 'process_completed') continue
+
+        const output = event.output && typeof event.output === 'object'
+          ? event.output as Record<string, unknown>
+          : null
+        const error = getTrellisQueueError(event, output)
+        if (event.success === false || error) throw new Error(error ?? `${label} failed`)
+        return Array.isArray(output?.data) ? output.data : []
       }
     }
-    throw new Error(`${label} completed without result data`)
-  })(), timeoutMs, label)
+
+    throw new Error(`${label} queue stream closed before completion`)
+  } catch (error) {
+    if (abortController.signal.aborted) {
+      throw new Error(`${label} timed out after ${Math.round(timeoutMs / 1000)}s`)
+    }
+    throw error
+  } finally {
+    clearTimeout(timeoutId)
+    abortController.abort()
+  }
 }
 
-function getTrellisGradioEventError(event: TrellisGradioEvent): string | null {
-  for (const value of [event.message, event.title]) {
+function getTrellisQueueError(
+  event: TrellisQueueEvent,
+  output: Record<string, unknown> | null,
+): string | null {
+  for (const value of [output?.error, output?.message, event.error, event.message, event.title]) {
     if (typeof value === 'string' && value.trim()) return value.trim()
     if (value && typeof value === 'object') {
       try {
         return JSON.stringify(value)
       } catch {
-        return 'TRELLIS.2 returned an unreadable error'
+        return 'TRELLIS.2 queue returned an unreadable error'
       }
     }
   }
   return null
+}
+
+function parseTrellisQueueEvent(message: string): TrellisQueueEvent | null {
+  const data = message
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith('data:'))
+    .map((line) => line.slice(5).trimStart())
+    .join('\n')
+  if (!data) return null
+
+  try {
+    return JSON.parse(data) as TrellisQueueEvent
+  } catch {
+    return null
+  }
 }
 
 function makeTrellis2GenerateArgs(image: unknown): Record<string, unknown> {
@@ -906,6 +945,13 @@ function makeTrellis2ExtractArgs(): Record<string, unknown> {
     decimation_target: PIXAL3D_HF_GENERATION_SETTINGS.decimationTarget,
     texture_size: PIXAL3D_HF_GENERATION_SETTINGS.textureSize,
   }
+}
+
+function makeTrellis2ExtractQueueArgs(): unknown[] {
+  const { decimation_target, texture_size } = makeTrellis2ExtractArgs()
+  // Component 45 is gr.State. The value stays on the Space under
+  // session_hash, and Gradio's client deliberately submits null in its place.
+  return [null, decimation_target, texture_size]
 }
 
 function makeGradioImageFile(dataUrl: string, fileName: string) {
