@@ -21,6 +21,15 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 )
 
+async function nextSharedAvatarProxyIndex(poolSize: number): Promise<number> {
+  const { data, error } = await supabase.rpc('next_avatar_proxy_index', { p_pool_size: poolSize })
+  if (error) throw error
+  if (typeof data !== 'number' || !Number.isInteger(data)) {
+    throw new Error('Shared proxy cursor returned an invalid index')
+  }
+  return data
+}
+
 const TRELLIS_STYLE = 'photo_preserving_avatar'
 const TRELLIS_MAX_TEXTURE_SIZE = 2048
 const TRELLIS_MAX_TRIANGLES = 300000
@@ -1940,6 +1949,7 @@ async function requestHuggingFaceTrellisModel(
 ): Promise<TrellisModelResult> {
   return withRotatingSocksProxy(
     () => requestHuggingFaceTrellisModelThroughProxy(userId, images, emit),
+    nextSharedAvatarProxyIndex,
   )
 }
 
@@ -2613,7 +2623,7 @@ avatarRouter.post('/mirror-model', async (c) => {
         triangleCount: null,
         autorig,
       }
-    }))
+    }, nextSharedAvatarProxyIndex))
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Model mirror failed'
     console.error('[Avatar Pixal3D] Mirror error:', message)

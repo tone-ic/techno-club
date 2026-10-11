@@ -134,11 +134,30 @@ function makeAgent(proxy: SocksProxyConfig | null, timeoutMs: number): Agent {
   })
 }
 
-export function withRotatingSocksProxy<T>(work: () => Promise<T>): Promise<T> {
-  const selected = configuredProxyPool.length
-    ? configuredProxyPool[nextProxyIndex % configuredProxyPool.length]
-    : defaultProxy
-  if (configuredProxyPool.length) nextProxyIndex = (nextProxyIndex + 1) % configuredProxyPool.length
+export async function withRotatingSocksProxy<T>(
+  work: () => Promise<T>,
+  resolveSharedIndex?: (poolSize: number) => Promise<number>,
+): Promise<T> {
+  let selected: SocksProxyConfig | null = defaultProxy
+  if (configuredProxyPool.length) {
+    let selectedIndex: number | null = null
+    if (resolveSharedIndex) {
+      try {
+        const sharedIndex = await resolveSharedIndex(configuredProxyPool.length)
+        if (Number.isInteger(sharedIndex) && sharedIndex >= 0 && sharedIndex < configuredProxyPool.length) {
+          selectedIndex = sharedIndex
+        }
+      } catch {
+        console.warn('[Proxy] Shared round-robin cursor unavailable; using process-local rotation')
+      }
+    }
+    if (selectedIndex === null) {
+      selectedIndex = nextProxyIndex % configuredProxyPool.length
+      nextProxyIndex = (nextProxyIndex + 1) % configuredProxyPool.length
+    }
+    selected = configuredProxyPool[selectedIndex]
+    console.log(`[Proxy] Selected pool entry ${selectedIndex + 1}/${configuredProxyPool.length}`)
+  }
   if (!selected) return work()
   return requestProxyContext.run(selected, work)
 }

@@ -183,7 +183,9 @@ orchestrates the Gradio session and file transfer.
 2. The API selects the next proxy in the configured pool for each 3D generation or Hugging Face
    model-download request. Generation and its temporary GLB download stay on the same proxy.
    Keep credentials on the API host; do not put them in the web app.
-3. No per-user proxy assignment or Supabase migration is needed for proxy selection.
+3. Apply `supabase/migrations/008_shared_proxy_rotation_cursor.sql` to keep the round-robin
+   cursor shared across API restarts and replicas. If it is unavailable, the API falls back to
+   process-local rotation. Proxies are never assigned to individual users.
 4. `SOCKS5_PROXY` remains an optional single-proxy fallback when the pool is empty.
 5. The model is then uploaded to the site's Supabase storage directly, and the browser continues
    using the site directly. Run `pnpm --filter api proxy:check` to inspect the first configured
