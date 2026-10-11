@@ -162,6 +162,29 @@ export async function withRotatingSocksProxy<T>(
   return requestProxyContext.run(selected, work)
 }
 
+function collectErrorText(error: unknown, depth = 0, seen = new Set<object>()): string {
+  if (depth > 6) return ''
+  if (typeof error === 'string') return error
+  if (!error || typeof error !== 'object' || seen.has(error)) return ''
+  seen.add(error)
+
+  if (error instanceof Error) {
+    return [error.name, error.message, collectErrorText(error.cause, depth + 1, seen)].join(' ')
+  }
+
+  const record = error as Record<string, unknown>
+  return ['message', 'detail', 'details', 'cause', 'error', 'data', 'original_msg']
+    .map((key) => collectErrorText(record[key], depth + 1, seen))
+    .filter(Boolean)
+    .join(' ')
+}
+
+function shouldStopProxyRetries(error: unknown): boolean {
+  const message = collectErrorText(error)
+  return /zerogpu illegal duration|requested gpu duration.{0,100}maximum allowed|zerogpu quota exceeded|exceeded.{0,80}zerogpu quota/i
+    .test(message)
+}
+
 export async function withRotatingSocksProxyRetry<T>(
   work: () => Promise<T>,
   resolveSharedIndex?: (poolSize: number) => Promise<number>,
@@ -179,6 +202,10 @@ export async function withRotatingSocksProxyRetry<T>(
       return await withRotatingSocksProxy(work, resolveSharedIndex)
     } catch (error) {
       lastError = error
+      if (shouldStopProxyRetries(error)) {
+        console.error('[Proxy] Not retrying: Hugging Face ZeroGPU rejected the requested duration or quota')
+        throw error
+      }
       if (attempt < maxAttempts) {
         console.warn(`[Proxy] Generation attempt ${attempt}/${maxAttempts} failed; rotating to the next proxy`)
       }
@@ -186,10 +213,6 @@ export async function withRotatingSocksProxyRetry<T>(
   }
 
   throw lastError
-}
-
-export function maskProxy(proxy: SocksProxyConfig): string {
-  return `${proxy.userId ? `${proxy.userId}:***@` : ''}${proxy.host}:${proxy.port}`
 }
 
 let installed = false
@@ -260,7 +283,6 @@ export function installSocksProxyFromEnv(): void {
 
   setGlobalDispatcher(new RequestProxyDispatcher())
   installed = true
-  const configured = configuredProxyPool.map(maskProxy)
-  if (defaultProxy) configured.push(`default:${maskProxy(defaultProxy)}`)
-  console.log(`[Proxy] SOCKS5 round-robin pool enabled (${configured.length} proxy entr${configured.length === 1 ? 'y' : 'ies'}) for: ${rules.join(', ')}`)
+  const fallbackSummary = defaultProxy ? ', 1 default fallback' : ''
+  console.log(`[Proxy] SOCKS5 round-robin pool enabled (${configuredProxyPool.length} rotating entr${configuredProxyPool.length === 1 ? 'y' : 'ies'}${fallbackSummary}) for: ${rules.join(', ')}`)
 }
