@@ -180,19 +180,15 @@ orchestrates the Gradio session and file transfer.
    instead be set in `SOCKS5_PROXIES`, separated by `|`. For platforms where uploading a large
    environment value is awkward, gzip the `|`-separated list, base64-encode it, and set
    `SOCKS5_PROXIES_GZIP_BASE64`.
-2. The API automatically assigns a proxy to each authenticated user and stores that assignment in
-   Supabase. As long as the pool has an unused proxy, users receive distinct proxies. If the pool is
-   exhausted, the least-used proxy is shared. `SOCKS5_USER_PROXY_MAP` can override selected
-   assignments manually. Keep credentials on the API host; do not put them in the web app.
-3. Apply `supabase/migrations/007_avatar_proxy_assignments.sql` before enabling the proxy pool.
-4. `SOCKS5_PROXY` remains an optional single-proxy fallback for traffic outside a user generation.
-5. Run `pnpm --filter api proxy:check` to inspect the first configured proxy and probe Hugging Face.
+2. The API selects the next proxy in the configured pool for each 3D generation or Hugging Face
+   model-download request. Generation and its temporary GLB download stay on the same proxy.
+   Keep credentials on the API host; do not put them in the web app.
+3. No per-user proxy assignment or Supabase migration is needed for proxy selection.
+4. `SOCKS5_PROXY` remains an optional single-proxy fallback when the pool is empty.
+5. The model is then uploaded to the site's Supabase storage directly, and the browser continues
+   using the site directly. Run `pnpm --filter api proxy:check` to inspect the first configured
+   proxy and probe Hugging Face.
 
 `apps/api/src/utils/socksProxy.ts` installs a global undici dispatcher for hosts from
 `SOCKS5_PROXY_HOSTS` (default `huggingface.co,hf.space,gradio.live`). DNS is resolved by the proxy.
 `undici` is pinned to v6 to match the Node 20/22 built-in `fetch` (on Node 24 use `undici@^7`).
-For anonymous ZeroGPU calls, Hugging Face/Gradio uses an `X-IP-Token` identity that varies by
-requesting user; its docs warn that omitting this identity falls back to stricter unauthenticated
-limits. Since this API calls Hugging Face through each user's assigned proxy, distinct proxy egress
-IPs should give those calls distinct IP-based identities (inference from the documented behavior).
-This separates anonymous per-IP usage, but does not grant a logged-in HF account's personal quota.

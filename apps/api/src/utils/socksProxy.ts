@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
@@ -13,7 +12,7 @@ import { SocksClient } from 'socks'
  * Optional SOCKS5 routing for the API server's outgoing HTTP(S) traffic.
  *
  * Env:
- *   SOCKS5_PROXIES      pipe-separated SOCKS5 URLs assigned persistently by user ID.
+ *   SOCKS5_PROXIES      pipe-separated SOCKS5 URLs selected round-robin per operation.
  *   SOCKS5_PROXIES_FILE file with one proxy per line; paths are relative to apps/api.
  *   SOCKS5_PROXY        optional default proxy for requests outside a user context.
  *   SOCKS5_PROXY_HOSTS  comma-separated host suffixes that go through the proxy.
@@ -21,7 +20,10 @@ import { SocksClient } from 'socks'
  */
 
 const DEFAULT_PROXIED_HOSTS = ['huggingface.co', 'hf.space', 'gradio.live']
-const userProxyContext = new AsyncLocalStorage<SocksProxyConfig>()
+const requestProxyContext = new AsyncLocalStorage<SocksProxyConfig>()
+let configuredProxyPool: SocksProxyConfig[] = []
+let defaultProxy: SocksProxyConfig | null = null
+let nextProxyIndex = 0
 
 export interface SocksProxyConfig {
   host: string
@@ -132,40 +134,13 @@ function makeAgent(proxy: SocksProxyConfig | null, timeoutMs: number): Agent {
   })
 }
 
-export function socksProxyFingerprint(proxy: SocksProxyConfig): string {
-  return createHash('sha256').update(proxyKey(proxy)).digest('hex')
-}
-
-function parseUserProxyMap(): Map<string, SocksProxyConfig> {
-  const raw = process.env.SOCKS5_USER_PROXY_MAP || ''
-  const result = new Map<string, SocksProxyConfig>()
-  for (const entry of raw.split('|').map((value) => value.trim()).filter(Boolean)) {
-    const separator = entry.indexOf('=')
-    if (separator <= 0 || separator === entry.length - 1) {
-      throw new Error('SOCKS5_USER_PROXY_MAP entries must look like supabase-user-id=socks5://host:port')
-    }
-    const userId = entry.slice(0, separator).trim()
-    if (result.has(userId)) throw new Error(`Duplicate user in SOCKS5_USER_PROXY_MAP: ${userId}`)
-    result.set(userId, parseSocksProxy(entry.slice(separator + 1)))
-  }
-  return result
-}
-
-export async function withUserSocksProxy<T>(
-  userId: string,
-  resolveAssignment: (proxyFingerprints: string[]) => Promise<string>,
-  work: () => Promise<T>,
-): Promise<T> {
-  const proxies = readConfiguredProxies()
-  const explicitAssignment = parseUserProxyMap().get(userId)
-  let selected = explicitAssignment
-  if (!selected && proxies.length) {
-    const assignedFingerprint = await resolveAssignment(proxies.map(socksProxyFingerprint))
-    selected = proxies.find((proxy) => socksProxyFingerprint(proxy) === assignedFingerprint)
-    if (!selected) throw new Error('Assigned SOCKS5 proxy is missing from SOCKS5_PROXIES')
-  }
+export function withRotatingSocksProxy<T>(work: () => Promise<T>): Promise<T> {
+  const selected = configuredProxyPool.length
+    ? configuredProxyPool[nextProxyIndex % configuredProxyPool.length]
+    : defaultProxy
+  if (configuredProxyPool.length) nextProxyIndex = (nextProxyIndex + 1) % configuredProxyPool.length
   if (!selected) return work()
-  return userProxyContext.run(selected, work)
+  return requestProxyContext.run(selected, work)
 }
 
 export function maskProxy(proxy: SocksProxyConfig): string {
@@ -177,12 +152,11 @@ let installed = false
 export function installSocksProxyFromEnv(): void {
   if (installed) return
 
-  const proxies = readConfiguredProxies()
-  const userProxyMap = parseUserProxyMap()
-  const defaultProxy = process.env.SOCKS5_PROXY?.trim()
+  configuredProxyPool = readConfiguredProxies()
+  defaultProxy = process.env.SOCKS5_PROXY?.trim()
     ? parseSocksProxy(process.env.SOCKS5_PROXY)
     : null
-  if (!proxies.length && !userProxyMap.size && !defaultProxy) return
+  if (!configuredProxyPool.length && !defaultProxy) return
 
   const rules = (process.env.SOCKS5_PROXY_HOSTS || DEFAULT_PROXIED_HOSTS.join(','))
     .split(',')
@@ -203,11 +177,11 @@ export function installSocksProxyFromEnv(): void {
     return agent
   }
 
-  class UserProxyDispatcher extends Dispatcher {
+  class RequestProxyDispatcher extends Dispatcher {
     dispatch(options: Dispatcher.DispatchOptions, handler: Dispatcher.DispatchHandlers): boolean {
       const origin = options.origin ? new URL(options.origin) : null
       const proxy = origin && hostMatches(origin.hostname, rules)
-        ? userProxyContext.getStore() ?? defaultProxy
+        ? requestProxyContext.getStore() ?? defaultProxy
         : null
       return getAgent(proxy).dispatch(options, handler)
     }
@@ -239,11 +213,9 @@ export function installSocksProxyFromEnv(): void {
     }
   }
 
-  setGlobalDispatcher(new UserProxyDispatcher())
+  setGlobalDispatcher(new RequestProxyDispatcher())
   installed = true
-  const configured = proxies.map(maskProxy)
-  const mappedProxies = new Map([...userProxyMap.values()].map((proxy) => [proxyKey(proxy), proxy]))
-  configured.push(...[...mappedProxies.values()].map((proxy) => `mapped:${maskProxy(proxy)}`))
+  const configured = configuredProxyPool.map(maskProxy)
   if (defaultProxy) configured.push(`default:${maskProxy(defaultProxy)}`)
-  console.log(`[Proxy] SOCKS5 pool enabled (${configured.length} proxy entr${configured.length === 1 ? 'y' : 'ies'}) for: ${rules.join(', ')}`)
+  console.log(`[Proxy] SOCKS5 round-robin pool enabled (${configured.length} proxy entr${configured.length === 1 ? 'y' : 'ies'}) for: ${rules.join(', ')}`)
 }

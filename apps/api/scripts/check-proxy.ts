@@ -50,7 +50,6 @@ async function main() {
   process.env.SOCKS5_PROXY = proxy
   delete process.env.SOCKS5_PROXIES
   delete process.env.SOCKS5_PROXIES_FILE
-  delete process.env.SOCKS5_USER_PROXY_MAP
   if (hasProxyPool && !defaultProxy) console.log('Checking the first proxy in the configured pool')
 
   await ip('direct IP')
