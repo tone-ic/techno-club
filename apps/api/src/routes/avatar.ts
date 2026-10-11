@@ -49,7 +49,7 @@ const KIE_POLL_TIMEOUT_MS = Number(process.env.KIE_POLL_TIMEOUT_MS || 900_000)
 const KIE_DOWNLOAD_TIMEOUT_MS = Number(process.env.KIE_DOWNLOAD_TIMEOUT_MS || 90_000)
 const KIE_DOWNLOAD_ATTEMPTS = Math.max(1, Number(process.env.KIE_DOWNLOAD_ATTEMPTS || 3))
 const AVATAR_MODELS_BUCKET = process.env.SUPABASE_AVATAR_MODELS_BUCKET || 'avatar-models'
-const PIXAL3D_SPACE_ID = 'microsoft/TRELLIS.2'
+const PIXAL3D_SPACE_ID = 'TencentARC/Pixal3D'
 const PIXAL3D_SERVER_SPACE_ID = 'TencentARC/Pixal3D-Server'
 const PIXAL3D_GRADIO_LIVE_HOST_SUFFIX = '.gradio.live'
 const HF_PIXAL3D_SPACE_ID = process.env.HF_TRELLIS_SPACE_ID || PIXAL3D_SPACE_ID
@@ -1609,6 +1609,20 @@ async function connectHuggingFaceTrellisClient(): Promise<Pixal3dClientConnectio
     HF_CONNECT_TIMEOUT_MS,
     `Hugging Face TRELLIS connect (${target.name})`,
   )
+
+  const requiredEndpoints = ['/preprocess', '/generate_3d', '/extract_glb_api']
+  const availableEndpoints = Object.keys(gradio.api_info?.named_endpoints ?? {})
+  const missingEndpoints = requiredEndpoints.filter((endpoint) => !getGradioNamedEndpoint(gradio.api_info, endpoint))
+  if (missingEndpoints.length) {
+    gradio.close()
+    throw new Error(
+      `Hugging Face Space ${target.name} is incompatible with the Pixal3D API. ` +
+      `Missing endpoints: ${missingEndpoints.join(', ')}. ` +
+      `Available endpoints: ${availableEndpoints.join(', ') || 'none'}. ` +
+      `Set HF_TRELLIS_SPACE_ID to TencentARC/Pixal3D or use a compatible Pixal3D Space.`,
+    )
+  }
+
   return {
     gradio,
     baseUrl: target.url,
