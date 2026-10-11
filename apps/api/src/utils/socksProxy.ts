@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
+import { gunzipSync } from 'node:zlib'
 import tls from 'node:tls'
 import net from 'node:net'
 import { Agent, Dispatcher, Pool, setGlobalDispatcher } from 'undici'
@@ -60,6 +61,14 @@ export function parseSocksProxy(raw: string): SocksProxyConfig {
 
 function readConfiguredProxies(): SocksProxyConfig[] {
   const values = (process.env.SOCKS5_PROXIES || '').split('|')
+  const compressedPool = process.env.SOCKS5_PROXIES_GZIP_BASE64?.trim()
+  if (compressedPool) {
+    try {
+      values.push(...gunzipSync(Buffer.from(compressedPool, 'base64')).toString('utf8').split('|'))
+    } catch {
+      throw new Error('SOCKS5_PROXIES_GZIP_BASE64 must be valid gzip data encoded as base64')
+    }
+  }
   const fileName = process.env.SOCKS5_PROXIES_FILE?.trim()
   if (fileName) {
     const apiRoot = path.resolve(__dirname, '..', '..')

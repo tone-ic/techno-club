@@ -124,6 +124,7 @@ export type AvatarPipelineStage =
   | 'kie_wait'
   | 'kie_download'
   | 'kie_done'
+  | 'kie_skipped'
   | 'trellis_connect'
   | 'trellis_session'
   | 'trellis_preprocess'

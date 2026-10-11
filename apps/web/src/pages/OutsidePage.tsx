@@ -2335,6 +2335,7 @@ interface OutfitGenerationProcess {
   stage: OutfitPipelineStage
   sourceImage: string | null
   kieImage: string | null
+  photoProcessingSkipped?: boolean
   progress: number
   message: string
   liveProgress?: AvatarLiveProgress
@@ -2599,7 +2600,7 @@ function OutfitModal({
     if (file) handleSelectedFile(file)
   }, [handleSelectedFile])
 
-  const handleGenerate = useCallback(async () => {
+  const handleGenerate = useCallback(async (skipPhotoProcessing = false) => {
     const fullbody = photos.fullbody
     if (!fullbody) return
     const face = photos.face ?? fullbody
@@ -2609,6 +2610,7 @@ function OutfitModal({
       stage: 'source',
       sourceImage: fullbody,
       kieImage: null,
+      photoProcessingSkipped: skipPhotoProcessing,
       progress: 5,
       message: 'Готовим исходное фото',
     })
@@ -2620,40 +2622,61 @@ function OutfitModal({
         stage: 'fallback',
         sourceImage: fullbody,
         kieImage: null,
+        photoProcessingSkipped: skipPhotoProcessing,
         progress: 22,
         message: 'Быстрый аватар готов',
       })
       setNotice({ tone: 'pending', message: 'Подготавливаем фото' })
+      let imageFor3d: unknown = fullbody
+      let displayedPhoto: string | null = null
+      if (skipPhotoProcessing) {
+        setGenerationProcess({
+          stage: 'kie_skipped',
+          sourceImage: fullbody,
+          kieImage: null,
+          photoProcessingSkipped: true,
+          progress: 38,
+          message: appText(language, 'Используем исходное фото без платной обработки', 'Using the original photo without paid processing'),
+        })
+        setNotice({ tone: 'pending', message: appText(language, 'Используем исходное фото без обработки', 'Using the original photo without processing') })
+      } else {
       setGenerationProcess({
         stage: 'kie_upload',
         sourceImage: fullbody,
         kieImage: null,
+        photoProcessingSkipped: false,
         progress: 30,
         message: 'Отправляем фото на подготовку',
       })
 
       const { prepared, trellisImage } = await prepareTrellisModelPhoto(fullbody)
+      imageFor3d = trellisImage
+      displayedPhoto = prepared.image
       setGenerationProcess({
         stage: 'kie_done',
         sourceImage: fullbody,
         kieImage: prepared.image,
+        photoProcessingSkipped: false,
         progress: 58,
         message: 'Фото готово, подключаемся к 3D-сервису через прокси',
       })
       setNotice({ tone: 'pending', message: 'Подключаемся к 3D-сервису через прокси' })
+      }
       setGenerationProcess({
         stage: 'trellis_connect',
         sourceImage: fullbody,
-        kieImage: prepared.image,
-        progress: 62,
+        kieImage: displayedPhoto,
+        photoProcessingSkipped: skipPhotoProcessing,
+        progress: skipPhotoProcessing ? 42 : 62,
         message: 'Подключаемся к 3D-сервису через прокси',
       })
 
-      const result = await generateTrellisAvatarViaProxyFromPreparedImages([trellisImage], fallback.config, (event) => {
+      const result = await generateTrellisAvatarViaProxyFromPreparedImages([imageFor3d], fallback.config, (event) => {
         setGenerationProcess({
           stage: event.stage,
           sourceImage: fullbody,
-          kieImage: prepared.image,
+          kieImage: displayedPhoto,
+          photoProcessingSkipped: skipPhotoProcessing,
           progress: event.progress,
           message: event.message,
           liveProgress: event.liveProgress,
@@ -2665,7 +2688,8 @@ function OutfitModal({
       setGenerationProcess({
         stage: 'done',
         sourceImage: fullbody,
-        kieImage: prepared.image,
+        kieImage: displayedPhoto,
+        photoProcessingSkipped: skipPhotoProcessing,
         progress: 100,
         message: 'Аватар готов',
       })
@@ -2686,7 +2710,7 @@ function OutfitModal({
       setError(formatOutfitGenerationError(message))
       setStep('review')
     }
-  }, [photos.face, photos.fullbody])
+  }, [language, photos.face, photos.fullbody])
 
   const handleConfirm = useCallback(async () => {
     if (!generated && !photos.fullbody) return
@@ -2831,7 +2855,8 @@ function OutfitModal({
           }}
         />
         {error && <div style={{color:'#ff4444',fontSize:13,marginTop:8,textAlign:'center',maxWidth:360}}>{error}</div>}
-        <button style={btnStyle} onClick={handleGenerate}>{appText(language, 'СОЗДАТЬ 3D АВАТАР', 'CREATE 3D AVATAR')}</button>
+        <button style={btnStyle} onClick={() => void handleGenerate(false)}>{appText(language, 'СОЗДАТЬ 3D АВАТАР', 'CREATE 3D AVATAR')}</button>
+        <button style={ghostStyle} onClick={() => void handleGenerate(true)}>{appText(language, 'Загрузить фото без обработки', 'USE PHOTO WITHOUT PROCESSING')}</button>
         <button style={ghostStyle} onClick={resetFlow}>{appText(language, 'ПЕРЕСНЯТЬ', 'RETAKE')}</button>
       </>}
 
@@ -2919,6 +2944,7 @@ function processOutfitPipelineEvent(
     stage: event.stage,
     sourceImage: event.sourceImage ?? sourceImage ?? current.sourceImage,
     kieImage: event.prepared?.image ?? current.kieImage,
+    photoProcessingSkipped: current.photoProcessingSkipped,
     progress: Math.max(current.progress, event.progress),
     message: event.message,
   }
@@ -2928,6 +2954,7 @@ function OutfitGenerationProcessView({ process, language }: { process: OutfitGen
   const stages: Array<{ key: OutfitPipelineStage; ru: string; en: string }> = [
     { key: 'source', ru: 'Исходное фото', en: 'Source photo' },
     { key: 'fallback', ru: 'Быстрый аватар', en: 'Quick avatar' },
+    { key: 'kie_skipped', ru: 'Обработка фото пропущена', en: 'Photo processing skipped' },
     { key: 'kie_upload', ru: 'Загрузка фото', en: 'Photo upload' },
     { key: 'kie_create', ru: 'Подготовка', en: 'Preparation' },
     { key: 'kie_wait', ru: 'Обработка фото', en: 'Photo processing' },
@@ -2948,18 +2975,24 @@ function OutfitGenerationProcessView({ process, language }: { process: OutfitGen
   return (
     <div style={outfitModalStyles.pipelinePanel}>
       <div style={outfitModalStyles.pipelineSteps}>
-        {stages.map((stage, index) => (
-          <div
-            key={stage.key}
-            style={{
-              ...outfitModalStyles.pipelineStep,
-              ...(index < activeIndex ? outfitModalStyles.pipelineStepDone : {}),
-              ...(index === activeIndex ? outfitModalStyles.pipelineStepActive : {}),
-            }}
-          >
-            {appText(language, stage.ru, stage.en)}
-          </div>
-        ))}
+        {stages.map((stage, index) => {
+          const skippedKieStage = process.photoProcessingSkipped
+            && stage.key.startsWith('kie_')
+            && stage.key !== 'kie_skipped'
+          return (
+            <div
+              key={stage.key}
+              style={{
+                ...outfitModalStyles.pipelineStep,
+                ...(index < activeIndex ? outfitModalStyles.pipelineStepDone : {}),
+                ...(index === activeIndex ? outfitModalStyles.pipelineStepActive : {}),
+                ...(skippedKieStage ? { opacity: 0.4, borderStyle: 'dashed', color: '#8f7892' } : {}),
+              }}
+            >
+              {appText(language, stage.ru, stage.en)}
+            </div>
+          )
+        })}
       </div>
 
       {showProgress && (

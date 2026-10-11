@@ -5,6 +5,7 @@
 import '../src/env'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
+import { gunzipSync } from 'node:zlib'
 import { installSocksProxyFromEnv } from '../src/utils/socksProxy'
 
 async function ip(label: string) {
@@ -28,9 +29,13 @@ async function probe(url: string) {
 }
 
 async function main() {
-  const hasProxyPool = Boolean(process.env.SOCKS5_PROXIES?.trim() || process.env.SOCKS5_PROXIES_FILE?.trim())
+  const compressedPool = process.env.SOCKS5_PROXIES_GZIP_BASE64?.trim()
+  const hasProxyPool = Boolean(process.env.SOCKS5_PROXIES?.trim() || compressedPool || process.env.SOCKS5_PROXIES_FILE?.trim())
   const defaultProxy = process.env.SOCKS5_PROXY?.trim()
   let proxy = defaultProxy || process.env.SOCKS5_PROXIES?.split('|').map((value) => value.trim()).find(Boolean)
+  if (!proxy && compressedPool) {
+    proxy = gunzipSync(Buffer.from(compressedPool, 'base64')).toString('utf8').split('|').map((value) => value.trim()).find(Boolean)
+  }
   if (!proxy && process.env.SOCKS5_PROXIES_FILE?.trim()) {
     const apiRoot = path.resolve(__dirname, '..')
     const filePath = path.resolve(apiRoot, process.env.SOCKS5_PROXIES_FILE.trim())
@@ -57,8 +62,20 @@ async function main() {
 
   await ip('IP via SOCKS5')
   console.log('Hugging Face through the proxy:')
-  await probe('https://huggingface.co/api/spaces/microsoft/TRELLIS.2')
-  await probe('https://microsoft-trellis-2.hf.space/config')
+  await probe('https://huggingface.co/api/spaces/TencentARC/Pixal3D')
+  await probe('https://tencentarc-pixal3d.hf.space/config')
+  await probe('https://tencentarc-pixal3d.hf.space/gradio_api/info')
+
+  try {
+    const dynamicImport = new Function('specifier', 'return import(specifier)') as
+      (specifier: string) => Promise<{ Client: { connect(url: string): Promise<{ api_info?: unknown; close(): void }> } }>
+    const { Client } = await dynamicImport('@gradio/client')
+    const client = await Client.connect('https://tencentarc-pixal3d.hf.space')
+    console.log('  Gradio client API info: OK')
+    client.close()
+  } catch (error) {
+    console.log(`  Gradio client API info: FAIL (${(error as Error).message})`)
+  }
 }
 
 main().then(() => process.exit(0), (error) => {

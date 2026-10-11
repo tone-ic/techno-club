@@ -59,7 +59,6 @@ const HF_PIXAL3D_CONFIGURED_INSTANCE_URLS = parsePixal3dInstanceUrls(
   process.env.HF_PIXAL3D_INSTANCE_URLS || process.env.HF_PIXAL3D_INSTANCE_URL || ''
 )
 const HF_PIXAL3D_DISCOVERY_TIMEOUT_MS = Number(process.env.HF_PIXAL3D_DISCOVERY_TIMEOUT_MS || 15_000)
-const HF_PIXAL3D_QUEUE_TIMEOUT_MS = Number(process.env.HF_PIXAL3D_QUEUE_TIMEOUT_MS || 5_000)
 const HF_PIXAL3D_INSTANCE_CACHE_MS = Number(process.env.HF_PIXAL3D_INSTANCE_CACHE_MS || 30_000)
 const BLENDER_AUTORIG_TIMEOUT_MS = Number(process.env.BLENDER_AUTORIG_TIMEOUT_MS || 180_000)
 const BLENDER_AUTORIG_REPLACE_MODEL_URL = process.env.BLENDER_AUTORIG_REPLACE_MODEL_URL !== '0'
@@ -109,6 +108,7 @@ const TRELLIS_HF_GENERATION_SETTINGS = {
 
 let kieKeyCursor = 0
 let cachedPixal3dInstanceUrls: { urls: string[]; expiresAt: number } | null = null
+let pixal3dTargetCursor = 0
 
 function numberFromEnv(name: string, fallback: number): number {
   const raw = process.env[name]
@@ -1422,7 +1422,6 @@ interface Pixal3dTarget {
   url: string
   name: string
   queueSize: number | null
-  queueError?: string
 }
 
 interface Pixal3dClientConnection {
@@ -1547,53 +1546,11 @@ async function getPixal3dTargets(): Promise<Pixal3dTarget[]> {
   throw new Error('Pixal3D-Server did not publish any available gradio.live instances')
 }
 
-async function readPixal3dQueueSize(target: Pixal3dTarget): Promise<number> {
-  const response = await fetchWithTimeout(
-    new URL('/queue?session_id=', target.url).toString(),
-    {},
-    HF_PIXAL3D_QUEUE_TIMEOUT_MS,
-    `Pixal3D queue check (${target.name})`,
-  )
-
-  if (!response.ok) {
-    const text = await response.text().catch(() => '')
-    throw new Error(`${response.status} ${text}`.trim())
-  }
-
-  const data = await response.json().catch(() => ({})) as Record<string, unknown>
-  const totalWaitingValue = Number(data.total_waiting)
-  const totalWaiting = Number.isFinite(totalWaitingValue) ? totalWaitingValue : 0
-  return Math.max(0, totalWaiting) + (data.gpu_busy ? 1 : 0)
-}
-
 async function selectPixal3dTarget(): Promise<Pixal3dTarget> {
   const targets = await getPixal3dTargets()
-  const checked = await Promise.all(targets.map(async (target) => {
-    try {
-      return {
-        ...target,
-        queueSize: await readPixal3dQueueSize(target),
-        queueError: undefined,
-      } satisfies Pixal3dTarget
-    } catch (error) {
-      return {
-        ...target,
-        queueSize: null,
-        queueError: formatExternalError(error, 'queue unavailable'),
-      } satisfies Pixal3dTarget
-    }
-  }))
-
-  const online = checked.filter((target) => target.queueSize !== null)
-  if (online.length) {
-    return online.sort((a, b) => (a.queueSize ?? 0) - (b.queueSize ?? 0))[0]
-  }
-
-  console.warn('[Avatar Pixal3D] Queue check failed for all instances:', checked.map((target) => ({
-    url: target.url,
-    error: target.queueError,
-  })))
-  return checked[0]
+  const selected = targets[pixal3dTargetCursor % targets.length]
+  pixal3dTargetCursor = (pixal3dTargetCursor + 1) % targets.length
+  return selected
 }
 
 function shouldSendHuggingFaceToken(target: Pixal3dTarget): boolean {

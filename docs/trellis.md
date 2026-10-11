@@ -177,7 +177,9 @@ orchestrates the Gradio session and file transfer.
 1. For large lists, put one proxy per line in the private `apps/api/proxies.txt` file and set
    `SOCKS5_PROXIES_FILE=./proxies.txt` in the API environment. Entries can use
    `login:password@host:port`; `socks5://login:password@host:port` also works. A short pool can
-   instead be set in `SOCKS5_PROXIES`, separated by `|`.
+   instead be set in `SOCKS5_PROXIES`, separated by `|`. For platforms where uploading a large
+   environment value is awkward, gzip the `|`-separated list, base64-encode it, and set
+   `SOCKS5_PROXIES_GZIP_BASE64`.
 2. The API automatically assigns a proxy to each authenticated user and stores that assignment in
    Supabase. As long as the pool has an unused proxy, users receive distinct proxies. If the pool is
    exhausted, the least-used proxy is shared. `SOCKS5_USER_PROXY_MAP` can override selected
