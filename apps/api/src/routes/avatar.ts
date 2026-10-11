@@ -11,7 +11,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { splitPngIntoVerticalThirds } from '../utils/pngCrop'
-import { withRotatingSocksProxy } from '../utils/socksProxy'
+import { withRotatingSocksProxyRetry } from '../utils/socksProxy'
 
 export const avatarRouter = new Hono()
 const requireFromHere = createRequire(__filename)
@@ -1947,7 +1947,7 @@ async function requestHuggingFaceTrellisModel(
   images: string[],
   emit?: AvatarProgressEmit,
 ): Promise<TrellisModelResult> {
-  return withRotatingSocksProxy(
+  return withRotatingSocksProxyRetry(
     () => requestHuggingFaceTrellisModelThroughProxy(userId, images, emit),
     nextSharedAvatarProxyIndex,
   )
@@ -2612,18 +2612,19 @@ avatarRouter.post('/mirror-model', async (c) => {
 
   try {
     const modelOrigin = new URL(body.modelUrl).origin
-    return c.json(await withRotatingSocksProxy(async () => {
-      const modelUrl = await uploadModelFromUrl(user.id, body.modelUrl, modelOrigin)
-      const autorig = await applyBlenderAutorig(user.id, modelUrl)
-      return {
-        modelUrl: BLENDER_AUTORIG_REPLACE_MODEL_URL && autorig.status === 'generated' && autorig.modelUrl
-          ? autorig.modelUrl
-          : modelUrl,
-        format: 'glb',
-        triangleCount: null,
-        autorig,
-      }
-    }, nextSharedAvatarProxyIndex))
+    const modelUrl = await withRotatingSocksProxyRetry(
+      () => uploadModelFromUrl(user.id, body.modelUrl, modelOrigin),
+      nextSharedAvatarProxyIndex,
+    )
+    const autorig = await applyBlenderAutorig(user.id, modelUrl)
+    return c.json({
+      modelUrl: BLENDER_AUTORIG_REPLACE_MODEL_URL && autorig.status === 'generated' && autorig.modelUrl
+        ? autorig.modelUrl
+        : modelUrl,
+      format: 'glb',
+      triangleCount: null,
+      autorig,
+    })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Model mirror failed'
     console.error('[Avatar Pixal3D] Mirror error:', message)

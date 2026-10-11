@@ -162,6 +162,32 @@ export async function withRotatingSocksProxy<T>(
   return requestProxyContext.run(selected, work)
 }
 
+export async function withRotatingSocksProxyRetry<T>(
+  work: () => Promise<T>,
+  resolveSharedIndex?: (poolSize: number) => Promise<number>,
+): Promise<T> {
+  const configuredAttempts = Number(process.env.SOCKS5_MAX_ATTEMPTS_PER_OPERATION || 3)
+  const requestedAttempts = Number.isInteger(configuredAttempts) && configuredAttempts > 0
+    ? configuredAttempts
+    : 3
+  const availableProxies = configuredProxyPool.length || (defaultProxy ? 1 : 0)
+  const maxAttempts = Math.min(requestedAttempts, Math.max(availableProxies, 1))
+  let lastError: unknown
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await withRotatingSocksProxy(work, resolveSharedIndex)
+    } catch (error) {
+      lastError = error
+      if (attempt < maxAttempts) {
+        console.warn(`[Proxy] Generation attempt ${attempt}/${maxAttempts} failed; rotating to the next proxy`)
+      }
+    }
+  }
+
+  throw lastError
+}
+
 export function maskProxy(proxy: SocksProxyConfig): string {
   return `${proxy.userId ? `${proxy.userId}:***@` : ''}${proxy.host}:${proxy.port}`
 }

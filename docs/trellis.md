@@ -187,7 +187,10 @@ orchestrates the Gradio session and file transfer.
    cursor shared across API restarts and replicas. If it is unavailable, the API falls back to
    process-local rotation. Proxies are never assigned to individual users.
 4. `SOCKS5_PROXY` remains an optional single-proxy fallback when the pool is empty.
-5. The model is then uploaded to the site's Supabase storage directly, and the browser continues
+5. If generation or downloading the temporary GLB fails, the API retries with the next proxy,
+   up to `SOCKS5_MAX_ATTEMPTS_PER_OPERATION` times (default `3`). Increase this API environment
+   variable to allow more retries, up to the number of configured proxies.
+6. The model is then uploaded to the site's Supabase storage directly, and the browser continues
    using the site directly. Run `pnpm --filter api proxy:check` to inspect the first configured
    proxy and probe Hugging Face.
 
