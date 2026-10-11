@@ -3,6 +3,7 @@ dist/
 .tmp/
 .env
 .env.local
+apps/api/proxies.txt
 *.local
 .DS_Store
 Thumbs.db

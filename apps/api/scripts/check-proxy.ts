@@ -3,6 +3,8 @@
  * Prints the exit IP without and with the proxy, then probes the Hugging Face hosts.
  */
 import '../src/env'
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
 import { installSocksProxyFromEnv } from '../src/utils/socksProxy'
 
 async function ip(label: string) {
@@ -26,10 +28,25 @@ async function probe(url: string) {
 }
 
 async function main() {
-  if (!process.env.SOCKS5_PROXY) {
-    console.error('SOCKS5_PROXY is not set in .env')
+  const hasProxyPool = Boolean(process.env.SOCKS5_PROXIES?.trim() || process.env.SOCKS5_PROXIES_FILE?.trim())
+  const defaultProxy = process.env.SOCKS5_PROXY?.trim()
+  let proxy = defaultProxy || process.env.SOCKS5_PROXIES?.split('|').map((value) => value.trim()).find(Boolean)
+  if (!proxy && process.env.SOCKS5_PROXIES_FILE?.trim()) {
+    const apiRoot = path.resolve(__dirname, '..')
+    const filePath = path.resolve(apiRoot, process.env.SOCKS5_PROXIES_FILE.trim())
+    proxy = readFileSync(filePath, 'utf8').split(/\r?\n/).map((value) => value.trim()).find(Boolean)
+  }
+  if (!proxy) {
+    console.error('SOCKS5_PROXY, SOCKS5_PROXIES, or SOCKS5_PROXIES_FILE is not set/configured')
     process.exit(1)
   }
+
+  // This standalone diagnostic checks the default proxy or the first proxy in the pool.
+  process.env.SOCKS5_PROXY = proxy
+  delete process.env.SOCKS5_PROXIES
+  delete process.env.SOCKS5_PROXIES_FILE
+  delete process.env.SOCKS5_USER_PROXY_MAP
+  if (hasProxyPool && !defaultProxy) console.log('Checking the first proxy in the configured pool')
 
   await ip('direct IP')
 

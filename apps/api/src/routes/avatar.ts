@@ -11,6 +11,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { splitPngIntoVerticalThirds } from '../utils/pngCrop'
+import { withUserSocksProxy } from '../utils/socksProxy'
 
 export const avatarRouter = new Hono()
 const requireFromHere = createRequire(__filename)
@@ -1962,6 +1963,26 @@ async function callHuggingFaceGenerateImageGlb(
 }
 
 async function requestHuggingFaceTrellisModel(
+  userId: string,
+  images: string[],
+  emit?: AvatarProgressEmit,
+): Promise<TrellisModelResult> {
+  return withUserSocksProxy(
+    userId,
+    async (proxyFingerprints) => {
+      const { data, error } = await supabase.rpc('assign_avatar_proxy', {
+        p_user_id: userId,
+        p_proxy_keys: proxyFingerprints,
+      })
+      if (error) throw new Error(`Could not assign a generation proxy: ${error.message}`)
+      if (typeof data !== 'string') throw new Error('Proxy assignment returned no proxy key')
+      return data
+    },
+    () => requestHuggingFaceTrellisModelThroughAssignedProxy(userId, images, emit),
+  )
+}
+
+async function requestHuggingFaceTrellisModelThroughAssignedProxy(
   userId: string,
   images: string[],
   emit?: AvatarProgressEmit,
