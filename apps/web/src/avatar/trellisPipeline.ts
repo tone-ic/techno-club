@@ -7,10 +7,8 @@ const API_URL = resolveRuntimeUrl(import.meta.env.VITE_API_URL || 'http://localh
   httpProtocol: 'http:',
   httpsProtocol: 'https:',
 })
-// 'browser' (default): the player's browser talks to the Hugging Face Space directly.
-// 'server': generate_3d + extract_glb run on apps/api, so they can be routed through
-// SOCKS5_PROXY (browsers cannot use SOCKS5 proxies from JS).
-const AVATAR_GENERATION_MODE = String(import.meta.env.VITE_AVATAR_GENERATION_MODE || 'browser').toLowerCase()
+// Keep Hugging Face generation on apps/api so its outbound Gradio traffic uses SOCKS5_PROXY.
+const AVATAR_GENERATION_MODE: string = 'server'
 const PIXAL3D_SPACE_ID = 'microsoft/TRELLIS.2'
 const PIXAL3D_SERVER_SPACE_ID = 'TencentARC/Pixal3D-Server'
 const HF_PIXAL3D_SPACE_ID = import.meta.env.VITE_HF_TRELLIS_SPACE_ID || PIXAL3D_SPACE_ID
@@ -711,7 +709,7 @@ export async function generateBrowserTrellisAvatar(
   }
 }
 
-export async function generateBrowserTrellisAvatarFromPreparedImages(
+export async function generateTrellisAvatarViaProxyFromPreparedImages(
   trellisImages: unknown[],
   fallbackConfig: AvatarConfig,
   onProgress?: (progress: Pick<AvatarPipelineEvent, 'stage' | 'progress' | 'message' | 'liveProgress'>) => void,
@@ -728,7 +726,7 @@ export async function generateBrowserTrellisAvatarFromPreparedImages(
   }
 
   if (AVATAR_GENERATION_MODE === 'server') {
-    return generateOnServerFromPreparedImage(firstImage, fallbackConfig, onProgress)
+    return generateViaApiFromPreparedImage(firstImage, fallbackConfig, onProgress)
   }
 
   const sessionId = makePixal3dSessionId()
@@ -808,8 +806,8 @@ function preparedImageToDataUrl(image: unknown): string | null {
   return null
 }
 
-// Server-side generation (through the API, so SOCKS5_PROXY applies to generate_3d/extract_glb).
-async function generateOnServerFromPreparedImage(
+// The API drives the Gradio session through SOCKS5; Hugging Face performs inference.
+async function generateViaApiFromPreparedImage(
   image: unknown,
   fallbackConfig: AvatarConfig,
   onProgress?: (progress: Pick<AvatarPipelineEvent, 'stage' | 'progress' | 'message' | 'liveProgress'>) => void,

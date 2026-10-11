@@ -9,7 +9,7 @@ import {
   normalizeFullBodyPhoto,
 } from '@/avatar/noAiAvatarFactory'
 import {
-  generateBrowserTrellisAvatarFromPreparedImages,
+  generateTrellisAvatarViaProxyFromPreparedImages,
   prepareTrellisModelPhoto,
   type AvatarLiveProgress,
   type AvatarPipelineStage,
@@ -293,18 +293,18 @@ export default function CameraPage() {
         sourceImage: fullbodyPhoto,
         kieImage: prepared.image,
         progress: 58,
-        message: 'Фото готово, запускаем 3D на вашем устройстве',
+        message: 'Фото готово, подключаемся к 3D-сервису через прокси',
       })
-      setTrellisNotice({ tone: 'pending', message: 'Собираем 3D-модель прямо с вашего устройства' })
+      setTrellisNotice({ tone: 'pending', message: 'Подключаемся к 3D-сервису через прокси' })
       setGenerationProcess({
         stage: 'trellis_connect',
         sourceImage: fullbodyPhoto,
         kieImage: prepared.image,
         progress: 62,
-        message: 'Подключаемся к 3D-сервису с вашего устройства',
+        message: 'Подключаемся к 3D-сервису через прокси',
       })
 
-      const result = await generateBrowserTrellisAvatarFromPreparedImages([trellisImage], nextGenerated.config, (event) => {
+      const result = await generateTrellisAvatarViaProxyFromPreparedImages([trellisImage], nextGenerated.config, (event) => {
         setGenerationProcess({
           stage: event.stage,
           sourceImage: fullbodyPhoto,

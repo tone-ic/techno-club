@@ -12,7 +12,7 @@ import {
   normalizeFullBodyPhoto,
 } from '@/avatar/noAiAvatarFactory'
 import {
-  generateBrowserTrellisAvatarFromPreparedImages,
+  generateTrellisAvatarViaProxyFromPreparedImages,
   getTrellisAvatarGenerationStatus,
   prepareTrellisModelPhoto,
   resumeTrellisAvatarStream,
@@ -2638,18 +2638,18 @@ function OutfitModal({
         sourceImage: fullbody,
         kieImage: prepared.image,
         progress: 58,
-        message: 'Фото готово, запускаем 3D на вашем устройстве',
+        message: 'Фото готово, подключаемся к 3D-сервису через прокси',
       })
-      setNotice({ tone: 'pending', message: 'Собираем 3D-модель прямо с вашего устройства' })
+      setNotice({ tone: 'pending', message: 'Подключаемся к 3D-сервису через прокси' })
       setGenerationProcess({
         stage: 'trellis_connect',
         sourceImage: fullbody,
         kieImage: prepared.image,
         progress: 62,
-        message: 'Подключаемся к 3D-сервису с вашего устройства',
+        message: 'Подключаемся к 3D-сервису через прокси',
       })
 
-      const result = await generateBrowserTrellisAvatarFromPreparedImages([trellisImage], fallback.config, (event) => {
+      const result = await generateTrellisAvatarViaProxyFromPreparedImages([trellisImage], fallback.config, (event) => {
         setGenerationProcess({
           stage: event.stage,
           sourceImage: fullbody,
