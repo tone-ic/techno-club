@@ -1792,11 +1792,11 @@ function getPixal3dSeed() {
   return Math.floor(Math.random() * (MAX_PIXAL3D_SEED + 1))
 }
 
-async function callHuggingFaceGenerateGlb(
+async function callHuggingFaceGenerateState(
   gradio: GradioClientInstance,
   image: unknown,
   sessionId: string,
-): Promise<unknown> {
+): Promise<string> {
   const generateArgs = filterGradioEndpointArgs(
     gradio,
     '/generate_3d',
@@ -1812,7 +1812,14 @@ async function callHuggingFaceGenerateGlb(
   )
   const statePath = findPixal3dStatePath(generated.data)
   if (!statePath) throw new Error('Hugging Face Pixal3D generate_3d returned no state path')
+  return statePath
+}
 
+async function callHuggingFaceExtractGlb(
+  gradio: GradioClientInstance,
+  statePath: string,
+  sessionId: string,
+): Promise<unknown> {
   const extractArgs = filterGradioEndpointArgs(
     gradio,
     '/extract_glb_api',
@@ -1824,6 +1831,11 @@ async function callHuggingFaceGenerateGlb(
     'Hugging Face Pixal3D extract_glb_api',
   )
   return extracted.data
+}
+
+function isZeroGpuLimitError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return /zerogpu|requested gpu duration|quota exceeded/i.test(message)
 }
 
 async function callHuggingFacePreprocessImage(
@@ -1919,26 +1931,29 @@ async function callHuggingFaceGenerateImageGlb(
 ): Promise<{ generated: unknown; fallbackReason?: string }> {
   const { handle_file } = await importGradioClient()
   let directError: unknown = null
+  let statePath: string
 
   try {
-    return {
-      generated: await callHuggingFaceGenerateGlb(
-        gradio,
-        handle_file(makeGradioImageBlob(image)),
-        sessionId,
-      ),
-    }
+    statePath = await callHuggingFaceGenerateState(
+      gradio,
+      handle_file(makeGradioImageBlob(image)),
+      sessionId,
+    )
   } catch (error) {
+    if (isZeroGpuLimitError(error)) throw error
     directError = error
-    console.warn('[Avatar TRELLIS] prepared image input failed:', error instanceof Error ? error.message : error)
+    console.warn('[Avatar TRELLIS] direct image input failed; retrying generation with Space preprocess:', error)
+    const imageForGeneration = await callHuggingFacePreprocessImage(gradio, image, baseUrl, downloadHeaders)
+    statePath = await callHuggingFaceGenerateState(gradio, imageForGeneration, sessionId)
   }
 
-  const imageForGeneration = await callHuggingFacePreprocessImage(gradio, image, baseUrl, downloadHeaders)
   return {
-    generated: await callHuggingFaceGenerateGlb(gradio, imageForGeneration, sessionId),
-    fallbackReason: `Direct TRELLIS generation failed, used preprocess fallback: ${
-      directError instanceof Error ? directError.message : String(directError)
-    }`,
+    generated: await callHuggingFaceExtractGlb(gradio, statePath, sessionId),
+    ...(directError ? {
+      fallbackReason: `Direct TRELLIS generation failed, used preprocess fallback: ${
+        directError instanceof Error ? directError.message : String(directError)
+      }`,
+    } : {}),
   }
 }
 
