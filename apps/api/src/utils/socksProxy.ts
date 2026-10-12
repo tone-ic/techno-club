@@ -169,7 +169,8 @@ function collectErrorText(error: unknown, depth = 0, seen = new Set<object>()): 
   seen.add(error)
 
   if (error instanceof Error) {
-    return [error.name, error.message, collectErrorText(error.cause, depth + 1, seen)].join(' ')
+    const cause = (error as Error & { cause?: unknown }).cause
+    return [error.name, error.message, collectErrorText(cause, depth + 1, seen)].join(' ')
   }
 
   const record = error as Record<string, unknown>
