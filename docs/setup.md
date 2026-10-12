@@ -234,11 +234,11 @@ fly deploy -c apps/api/fly.toml
 TRELLIS_WORKER_PROVIDER=huggingface
 TRELLIS_WORKER_URL=
 TRELLIS_WORKER_TOKEN=
-HF_TRELLIS_SPACE_ID=trellis-community/TRELLIS
+HF_TRELLIS_SPACE_ID=microsoft/TRELLIS.2
 SUPABASE_AVATAR_MODELS_BUCKET=avatar-models
 ```
 
-GLB генерация использует `/preprocess_image` и `/generate_and_extract_glb`: SS Guidance 10, SS Sampling 50, SLAT Guidance 9, SLAT Sampling 50, mesh simplify 0.9, texture size 2048, timeout 300 секунд на стадию.
+Генерация использует Microsoft TRELLIS.2 endpoint’ы `/preprocess_image`, `/image_to_3d` и `/extract_glb` в одной Gradio-сессии. Настройки совпадают с демо: 1024 resolution, 12 sampling steps на стадию, 300 000 целевых полигонов и текстура 2048.
 
 ---
 
