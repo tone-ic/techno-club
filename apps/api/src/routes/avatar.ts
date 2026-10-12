@@ -1416,6 +1416,11 @@ interface GradioApiInfo {
 
 interface GradioClientInstance {
   api_info?: GradioApiInfo
+  config?: { root?: string; root_url?: string }
+  upload(
+    files: Array<{ blob: Blob; orig_name?: string; size?: number; mime_type?: string }>,
+    rootUrl: string,
+  ): Promise<unknown[]>
   predict<T = unknown>(endpoint: string, data?: unknown[] | Record<string, unknown>): Promise<GradioPredictResult<T>>
   close(): void
 }
@@ -1424,7 +1429,6 @@ interface GradioClientModule {
   Client: {
     connect(appReference: string, options?: { token?: string }): Promise<GradioClientInstance>
   }
-  handle_file(file: Blob | Buffer | string): unknown
 }
 
 interface Pixal3dTarget {
@@ -1447,6 +1451,24 @@ async function importGradioClient(): Promise<GradioClientModule> {
   const dynamicImport = new Function('specifier', 'return import(specifier)') as
     (specifier: string) => Promise<GradioClientModule>
   return dynamicImport(pathToFileURL(requireFromHere.resolve('@gradio/client')).href)
+}
+
+async function uploadGradioBlob(
+  gradio: GradioClientInstance,
+  blob: Blob,
+  baseUrl: string,
+  fileName: string,
+): Promise<unknown> {
+  const rootUrl = gradio.config?.root ?? gradio.config?.root_url ?? baseUrl
+  const [uploadedFile] = await gradio.upload([{
+    blob,
+    orig_name: fileName,
+    size: blob.size,
+    mime_type: blob.type || 'application/octet-stream',
+  }], rootUrl)
+
+  if (!uploadedFile) throw new Error(`Hugging Face TRELLIS upload returned no file reference for ${fileName}`)
+  return uploadedFile
 }
 
 function getGradioNamedEndpoint(apiInfo: GradioApiInfo | undefined, endpoint: string): GradioEndpointInfo | null {
@@ -1893,8 +1915,12 @@ async function callHuggingFacePreprocessImage(
   downloadHeaders: Record<string, string>,
   api: 'trellis2' | 'pixal3d',
 ): Promise<unknown> {
-  const { handle_file } = await importGradioClient()
-  const file = handle_file(makeGradioImageBlob(image))
+  const file = await uploadGradioBlob(
+    gradio,
+    makeGradioImageBlob(image),
+    baseUrl,
+    'avatar-source.png',
+  )
   const endpoint = api === 'trellis2' ? '/preprocess_image' : '/preprocess'
   const args = filterGradioEndpointArgs(
     gradio,
@@ -1908,10 +1934,11 @@ async function callHuggingFacePreprocessImage(
   )
   const imageForGeneration = unwrapSingleGradioOutput(preprocessed.data)
   if (!imageForGeneration) throw new Error('Hugging Face TRELLIS preprocess returned no image')
-  return reuploadGradioImageForGeneration(imageForGeneration, baseUrl, downloadHeaders)
+  return reuploadGradioImageForGeneration(gradio, imageForGeneration, baseUrl, downloadHeaders)
 }
 
 async function reuploadGradioImageForGeneration(
+  gradio: GradioClientInstance,
   image: unknown,
   baseUrl: string,
   downloadHeaders: Record<string, string>,
@@ -1919,7 +1946,6 @@ async function reuploadGradioImageForGeneration(
   const fileUrl = findGradioFileUrl(image, baseUrl)
   if (!fileUrl) return image
 
-  const { handle_file } = await importGradioClient()
   const response = await fetchWithTimeout(
     fileUrl,
     { headers: downloadHeaders },
@@ -1933,7 +1959,12 @@ async function reuploadGradioImageForGeneration(
 
   const contentType = response.headers.get('content-type') || getGradioMimeType(image) || 'image/png'
   const bytes = await response.arrayBuffer()
-  return handle_file(new Blob([bytes], { type: contentType }))
+  return uploadGradioBlob(
+    gradio,
+    new Blob([bytes], { type: contentType }),
+    baseUrl,
+    'avatar-preprocessed.png',
+  )
 }
 
 function findGradioFileUrl(value: unknown, baseUrl: string): string | null {
@@ -1986,7 +2017,6 @@ async function callHuggingFaceGenerateImageGlb(
   downloadHeaders: Record<string, string>,
   api: 'trellis2' | 'pixal3d',
 ): Promise<{ generated: unknown; fallbackReason?: string }> {
-  const { handle_file } = await importGradioClient()
   let directError: unknown = null
   let state: unknown
 
@@ -2004,7 +2034,12 @@ async function callHuggingFaceGenerateImageGlb(
     try {
       state = await callHuggingFaceGenerateState(
         gradio,
-        handle_file(makeGradioImageBlob(image)),
+        await uploadGradioBlob(
+          gradio,
+          makeGradioImageBlob(image),
+          baseUrl,
+          'avatar-source.png',
+        ),
         sessionId,
         api,
       )
