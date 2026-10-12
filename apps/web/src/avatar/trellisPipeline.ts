@@ -9,7 +9,7 @@ const API_URL = resolveRuntimeUrl(import.meta.env.VITE_API_URL || 'http://localh
 })
 // Keep Hugging Face generation on apps/api so its outbound Gradio traffic uses SOCKS5_PROXY.
 const AVATAR_GENERATION_MODE: string = 'server'
-const PIXAL3D_SPACE_ID = 'microsoft/TRELLIS.2'
+const PIXAL3D_SPACE_ID = 'TencentARC/Pixal3D'
 const PIXAL3D_SERVER_SPACE_ID = 'TencentARC/Pixal3D-Server'
 const HF_PIXAL3D_SPACE_ID = import.meta.env.VITE_HF_TRELLIS_SPACE_ID || PIXAL3D_SPACE_ID
 const HF_PIXAL3D_SPACE_URL = makeHuggingFaceSpaceUrl(HF_PIXAL3D_SPACE_ID)

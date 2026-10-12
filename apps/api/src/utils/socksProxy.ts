@@ -181,9 +181,33 @@ function collectErrorText(error: unknown, depth = 0, seen = new Set<object>()): 
 }
 
 function shouldStopProxyRetries(error: unknown): boolean {
+  if (error instanceof ProxyRetrySuppressedError) return true
   const message = collectErrorText(error)
   return /zerogpu illegal duration|requested gpu duration.{0,100}maximum allowed|zerogpu quota exceeded|exceeded.{0,80}zerogpu quota/i
     .test(message)
+}
+
+export class ProxyRetrySuppressedError extends Error {
+  readonly originalError: unknown
+
+  constructor(operation: string, originalError: unknown) {
+    const detail = collectErrorText(originalError)
+    super(`${operation} failed after the Hugging Face request was submitted: ${detail}`)
+    this.name = 'ProxyRetrySuppressedError'
+    this.originalError = originalError
+  }
+}
+
+/** Run a Space endpoint once: a transport error may happen after its GPU job was queued. */
+export async function runHuggingFaceEndpointOnce<T>(
+  operation: string,
+  request: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await request()
+  } catch (error) {
+    throw new ProxyRetrySuppressedError(operation, error)
+  }
 }
 
 export async function withRotatingSocksProxyRetry<T>(
@@ -204,7 +228,12 @@ export async function withRotatingSocksProxyRetry<T>(
     } catch (error) {
       lastError = error
       if (shouldStopProxyRetries(error)) {
-        console.error('[Proxy] Not retrying: Hugging Face ZeroGPU rejected the requested duration or quota')
+        const errorText = collectErrorText(error)
+        const isZeroGpuRejection = /zerogpu illegal duration|requested gpu duration.{0,100}maximum allowed|zerogpu quota exceeded|exceeded.{0,80}zerogpu quota/i
+          .test(errorText)
+        console.error(error instanceof ProxyRetrySuppressedError && !isZeroGpuRejection
+          ? '[Proxy] Not retrying: the Hugging Face request may already be queued or using GPU'
+          : '[Proxy] Not retrying: Hugging Face ZeroGPU rejected the requested duration or quota')
         throw error
       }
       if (attempt < maxAttempts) {

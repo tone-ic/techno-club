@@ -234,11 +234,11 @@ fly deploy -c apps/api/fly.toml
 TRELLIS_WORKER_PROVIDER=huggingface
 TRELLIS_WORKER_URL=
 TRELLIS_WORKER_TOKEN=
-HF_TRELLIS_SPACE_ID=microsoft/TRELLIS.2
+HF_TRELLIS_SPACE_ID=TencentARC/Pixal3D
 SUPABASE_AVATAR_MODELS_BUCKET=avatar-models
 ```
 
-Генерация использует Microsoft TRELLIS.2 endpoint’ы `/preprocess_image`, `/image_to_3d` и `/extract_glb` в одной Gradio-сессии. Настройки совпадают с демо: 1024 resolution, 12 sampling steps на стадию, 300 000 целевых полигонов и текстура 2048.
+Генерация использует Pixal3D endpoint’ы `/preprocess`, `/generate_3d` и `/extract_glb_api` в одной Gradio-сессии. Настройки генерации передаются через API Space.
 
 ---
 

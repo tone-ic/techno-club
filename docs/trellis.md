@@ -28,7 +28,7 @@ Configure it only in server-side API env:
 TRELLIS_WORKER_PROVIDER=
 TRELLIS_WORKER_URL=http://127.0.0.1:7860
 TRELLIS_WORKER_TOKEN=
-HF_TRELLIS_SPACE_ID=microsoft/TRELLIS.2
+HF_TRELLIS_SPACE_ID=TencentARC/Pixal3D
 SUPABASE_AVATAR_MODELS_BUCKET=avatar-models
 KIE_API_KEYS=key_1,key_2,key_3
 KIE_API_BASE_URL=https://api.kie.ai
@@ -100,10 +100,10 @@ Local dev has two useful modes:
 
 3. No local GPU, manual/dev generation through Hugging Face Space:
    - set `TRELLIS_WORKER_PROVIDER=huggingface`
-   - set `HF_TRELLIS_SPACE_ID=microsoft/TRELLIS.2`
+   - set `HF_TRELLIS_SPACE_ID=TencentARC/Pixal3D`
    - leave `TRELLIS_WORKER_URL=` empty
    - set `HF_TOKEN` only if the Space requires authenticated access
-   - the API optionally uses KIE GPT Image 2 I2I to create one normalized full-body input, then calls Microsoft TRELLIS.2 `/preprocess_image`, `/image_to_3d`, and `/extract_glb` in one Gradio session.
+   - the API optionally uses KIE GPT Image 2 I2I to create one normalized full-body input, then calls Pixal3D `/preprocess`, `/generate_3d`, and `/extract_glb_api` in one Gradio session.
    - the Hugging Face call uses the Space defaults: 1024 resolution, 12 sampling steps per stage, 300,000 target faces, and 2048 texture size.
 
 The local wrapper must expose only the `/generate` contract above. It can return JSON with `modelUrl` or raw GLB bytes. The player-facing Hugging Face flow calls the Space from the browser so ZeroGPU sees the player's network IP. The API only mirrors the resulting GLB into Supabase Storage.

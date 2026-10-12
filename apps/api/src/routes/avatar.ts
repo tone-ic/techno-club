@@ -11,7 +11,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { splitPngIntoVerticalThirds } from '../utils/pngCrop'
-import { withRotatingSocksProxyRetry } from '../utils/socksProxy'
+import { runHuggingFaceEndpointOnce, withRotatingSocksProxyRetry } from '../utils/socksProxy'
 
 export const avatarRouter = new Hono()
 const requireFromHere = createRequire(__filename)
@@ -62,7 +62,10 @@ const TRELLIS2_SPACE_ID = 'microsoft/TRELLIS.2'
 const PIXAL3D_SPACE_ID = 'TencentARC/Pixal3D'
 const PIXAL3D_SERVER_SPACE_ID = 'TencentARC/Pixal3D-Server'
 const PIXAL3D_GRADIO_LIVE_HOST_SUFFIX = '.gradio.live'
-const HF_PIXAL3D_SPACE_ID = process.env.HF_TRELLIS_SPACE_ID || TRELLIS2_SPACE_ID
+const HF_PIXAL3D_SPACE_ID = process.env.HF_TRELLIS_SPACE_ID || PIXAL3D_SPACE_ID
+const HF_AVATAR_SPACE_LABEL = HF_PIXAL3D_SPACE_ID.toLowerCase() === TRELLIS2_SPACE_ID.toLowerCase()
+  ? 'TRELLIS.2'
+  : 'Pixal3D'
 const HF_PIXAL3D_SPACE_URL = makeHuggingFaceSpaceUrl(HF_PIXAL3D_SPACE_ID)
 const HF_PIXAL3D_SERVER_DISCOVERY_URL = process.env.HF_PIXAL3D_SERVER_DISCOVERY_URL || HF_PIXAL3D_SPACE_URL
 const HF_PIXAL3D_CONFIGURED_INSTANCE_URLS = parsePixal3dInstanceUrls(
@@ -1610,8 +1613,8 @@ async function connectHuggingFaceTrellisClient(): Promise<Pixal3dClientConnectio
   if (!hasTrellis2Endpoints && !hasPixal3dEndpoints) {
     gradio.close()
     throw new Error(
-      `Hugging Face Space ${target.name} is incompatible with TRELLIS.2. ` +
-      `Expected ${trellis2Endpoints.join(', ')}. ` +
+      `Hugging Face Space ${target.name} has no supported TRELLIS/Pixal3D API. ` +
+      `Expected either ${trellis2Endpoints.join(', ')} or ${pixal3dEndpoints.join(', ')}. ` +
       `Available endpoints: ${availableEndpoints.join(', ') || 'none'}.`,
     )
   }
@@ -1855,13 +1858,17 @@ async function callHuggingFaceGenerateState(
       : makePixal3dGenerateArgs(image, sessionId),
   )
   const startedAt = Date.now()
-  console.log(`[Avatar TRELLIS.2] Uploading image and starting ${endpoint}`)
-  const generated = await withTimeout(
-    gradio.predict(endpoint, generateArgs),
-    HF_GENERATE_TIMEOUT_MS,
-    `Hugging Face TRELLIS ${endpoint}`,
+  const label = api === 'trellis2' ? 'TRELLIS.2' : 'Pixal3D'
+  console.log(`[Avatar ${label}] Uploading image and starting ${endpoint}`)
+  const generated = await runHuggingFaceEndpointOnce(
+    `TRELLIS ${endpoint}`,
+    () => withTimeout(
+      gradio.predict(endpoint, generateArgs),
+      HF_GENERATE_TIMEOUT_MS,
+      `Hugging Face TRELLIS ${endpoint}`,
+    ),
   )
-  console.log(`[Avatar TRELLIS.2] ${endpoint} completed in ${Date.now() - startedAt}ms`)
+  console.log(`[Avatar ${label}] ${endpoint} completed in ${Date.now() - startedAt}ms`)
 
   if (api === 'trellis2') {
     // Gradio keeps the hidden gr.State on its server session. The same Client
@@ -1893,13 +1900,17 @@ async function callHuggingFaceExtractGlb(
       : makePixal3dExtractGlbArgs(String(state), sessionId),
   )
   const startedAt = Date.now()
-  console.log(`[Avatar TRELLIS.2] Starting ${endpoint}`)
-  const extracted = await withTimeout(
-    gradio.predict(endpoint, extractArgs),
-    HF_GENERATE_TIMEOUT_MS,
-    `Hugging Face TRELLIS ${endpoint}`,
+  const label = api === 'trellis2' ? 'TRELLIS.2' : 'Pixal3D'
+  console.log(`[Avatar ${label}] Starting ${endpoint}`)
+  const extracted = await runHuggingFaceEndpointOnce(
+    `TRELLIS ${endpoint}`,
+    () => withTimeout(
+      gradio.predict(endpoint, extractArgs),
+      HF_GENERATE_TIMEOUT_MS,
+      `Hugging Face TRELLIS ${endpoint}`,
+    ),
   )
-  console.log(`[Avatar TRELLIS.2] ${endpoint} completed in ${Date.now() - startedAt}ms`)
+  console.log(`[Avatar ${label}] ${endpoint} completed in ${Date.now() - startedAt}ms`)
   return extracted.data
 }
 
@@ -1927,10 +1938,13 @@ async function callHuggingFacePreprocessImage(
     endpoint,
     api === 'trellis2' ? { input: file } : { image: file },
   )
-  const preprocessed = await withTimeout(
-    gradio.predict(endpoint, args),
-    HF_PREPROCESS_TIMEOUT_MS,
-    `Hugging Face TRELLIS ${endpoint}`,
+  const preprocessed = await runHuggingFaceEndpointOnce(
+    `TRELLIS ${endpoint}`,
+    () => withTimeout(
+      gradio.predict(endpoint, args),
+      HF_PREPROCESS_TIMEOUT_MS,
+      `Hugging Face TRELLIS ${endpoint}`,
+    ),
   )
   const imageForGeneration = unwrapSingleGradioOutput(preprocessed.data)
   if (!imageForGeneration) throw new Error('Hugging Face TRELLIS preprocess returned no image')
@@ -2088,9 +2102,9 @@ async function requestHuggingFaceTrellisModelThroughProxy(
   if (!firstImage) throw new Error('3D-сборке нужно хотя бы одно фото')
 
   await emitProgress(emit, 'trellis_connect', 61, 'Подключаем модуль 3D-сборки')
-  console.log(`[Avatar TRELLIS.2] Connecting to Hugging Face Space ${HF_PIXAL3D_SPACE_ID}`)
+  console.log(`[Avatar ${HF_AVATAR_SPACE_LABEL}] Connecting to Hugging Face Space ${HF_PIXAL3D_SPACE_ID}`)
   const trellisSpace = await connectHuggingFaceTrellisClient()
-  console.log(`[Avatar TRELLIS.2] Connected to ${trellisSpace.name} using ${trellisSpace.api} API`)
+  console.log(`[Avatar ${HF_AVATAR_SPACE_LABEL}] Connected to ${trellisSpace.name} using ${trellisSpace.api} API`)
   const gradio = trellisSpace.gradio
   const sessionId = `doorclub-${userId}-${randomUUID()}`
 
