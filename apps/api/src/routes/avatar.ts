@@ -1802,6 +1802,8 @@ async function callHuggingFaceGenerateState(
     '/generate_3d',
     makePixal3dGenerateArgs(image, sessionId),
   )
+  const startedAt = Date.now()
+  console.log('[Avatar TRELLIS] Uploading image and starting generate_3d')
   const generated = await withTimeout(
     gradio.predict(
       '/generate_3d',
@@ -1810,6 +1812,7 @@ async function callHuggingFaceGenerateState(
     HF_GENERATE_TIMEOUT_MS,
     'Hugging Face Pixal3D generate_3d',
   )
+  console.log(`[Avatar TRELLIS] generate_3d completed in ${Date.now() - startedAt}ms`)
   const statePath = findPixal3dStatePath(generated.data)
   if (!statePath) throw new Error('Hugging Face Pixal3D generate_3d returned no state path')
   return statePath
@@ -1825,11 +1828,14 @@ async function callHuggingFaceExtractGlb(
     '/extract_glb_api',
     makePixal3dExtractGlbArgs(statePath, sessionId),
   )
+  const startedAt = Date.now()
+  console.log('[Avatar TRELLIS] Starting extract_glb_api')
   const extracted = await withTimeout(
     gradio.predict('/extract_glb_api', extractArgs),
     HF_GENERATE_TIMEOUT_MS,
     'Hugging Face Pixal3D extract_glb_api',
   )
+  console.log(`[Avatar TRELLIS] extract_glb_api completed in ${Date.now() - startedAt}ms`)
   return extracted.data
 }
 
@@ -1977,7 +1983,9 @@ async function requestHuggingFaceTrellisModelThroughProxy(
   if (!firstImage) throw new Error('3D-сборке нужно хотя бы одно фото')
 
   await emitProgress(emit, 'trellis_connect', 61, 'Подключаем модуль 3D-сборки')
+  console.log('[Avatar TRELLIS] Connecting to Pixal3D Space')
   const pixal3d = await connectHuggingFaceTrellisClient()
+  console.log(`[Avatar TRELLIS] Connected to ${pixal3d.name}; starting 3D request`)
   const gradio = pixal3d.gradio
   const sessionId = `doorclub-${userId}-${randomUUID()}`
 
